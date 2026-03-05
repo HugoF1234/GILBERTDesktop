@@ -1,0 +1,188 @@
+name: Release Gilbert Desktop
+
+on:
+  push:
+    tags:
+      - "v*"          # déclenché sur : git tag v0.3.0 && git push --tags
+  workflow_dispatch:  # ou lancement manuel depuis l'onglet Actions
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # macOS — .dmg  (Apple Silicon)
+  # Inclut Swift/ScreenCaptureKit pour la capture audio système
+  # ─────────────────────────────────────────────────────────────
+  build-macos:
+    name: macOS (.dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install frontend deps
+        run: npm install --legacy-peer-deps
+        working-directory: frontend
+
+      - name: Install desktop deps
+        run: npm install --legacy-peer-deps
+        working-directory: desktop
+
+      - name: Build Tauri (Apple Silicon)
+        run: npm run tauri build -- --target aarch64-apple-darwin
+        working-directory: desktop
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gilbert-macOS-arm64
+          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+
+  # ─────────────────────────────────────────────────────────────
+  # Windows — .msi
+  # (son système non disponible, micro uniquement)
+  # ─────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows (.msi)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install frontend deps
+        run: npm install --legacy-peer-deps
+        working-directory: frontend
+
+      - name: Install desktop deps
+        run: npm install --legacy-peer-deps
+        working-directory: desktop
+
+      - name: Build Tauri
+        run: npm run tauri build
+        working-directory: desktop
+
+      - name: Upload .msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gilbert-Windows
+          path: desktop/src-tauri/target/release/bundle/msi/*.msi
+
+  # ─────────────────────────────────────────────────────────────
+  # Linux — .AppImage
+  # (son système non disponible, micro uniquement)
+  # ─────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux (.AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install frontend deps
+        run: npm install --legacy-peer-deps
+        working-directory: frontend
+
+      - name: Install desktop deps
+        run: npm install --legacy-peer-deps
+        working-directory: desktop
+
+      - name: Build Tauri
+        run: npm run tauri build
+        working-directory: desktop
+
+      - name: Upload .AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gilbert-Linux
+          path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+
+  # ─────────────────────────────────────────────────────────────
+  # Créer la GitHub Release avec les 3 binaires
+  # ─────────────────────────────────────────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Gilbert ${{ github.ref_name }}
+          body: |
+            ## Gilbert Desktop ${{ github.ref_name }}
+
+            | Plateforme | Télécharger | Son système |
+            |---|---|---|
+            | macOS Apple Silicon (M1/M2/M3) | `.dmg` | ✅ Oui |
+            | Windows 10/11 | `.msi` | Micro uniquement |
+            | Linux | `.AppImage` | Micro uniquement |
+
+            ### macOS
+            1. Télécharger le `.dmg` → glisser Gilbert dans Applications
+            2. Premier lancement : **clic droit → Ouvrir**
+
+            ### Windows
+            Double-cliquer sur le `.msi`
+
+            ### Linux
+            ```bash
+            chmod +x Gilbert_*.AppImage && ./Gilbert_*.AppImage
+            ```
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.msi
+            artifacts/**/*.AppImage
