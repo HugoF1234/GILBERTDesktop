@@ -1,0 +1,61 @@
+[package]
+name = "gilbert-desktop"
+version = "0.1.0"
+description = "Gilbert Desktop (Tauri + Rust)"
+authors = ["Gilbert"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.70"
+
+[lib]
+name = "gilbert_desktop_lib"
+path = "src/lib.rs"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dependencies]
+tauri = { version = "1.5", features = [ "system-tray", "macos-private-api",
+  "custom-protocol",
+  "notification-all",
+  "dialog-all",
+  "fs-all",
+  "http-all",
+  "path-all",
+  "protocol-all",
+  "shell-open",
+  "devtools"
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.8", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1.37", features = ["rt-multi-thread", "macros", "sync"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"] }
+cpal = "0.15"
+hound = "3.5"
+dirs = "5.0"
+parking_lot = "0.12"
+sysinfo = "0.30"
+urlencoding = "2.1"
+hostname = "0.4"
+whoami = "1.5"
+
+# System audio capture - cross-platform
+# NOTE: macOS system audio capture temporarily disabled
+# The screencapturekit crate has compatibility issues with macOS 15 (Swift bridge includes macOS 26 symbols)
+# and the objc2-screen-capture-kit crate requires complex low-level implementation.
+# Will be re-enabled once these issues are resolved.
+# [target.'cfg(target_os = "macos")'.dependencies]
+# objc2 = "0.6"
+# objc2-screen-capture-kit = { version = "0.3", features = ["SCShareableContent", "SCStream"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_Foundation"] }
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+

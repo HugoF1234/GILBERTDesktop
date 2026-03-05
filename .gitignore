@@ -1,0 +1,18 @@
+# Rust
+desktop/src-tauri/target/
+
+# Node
+desktop/node_modules/
+frontend/node_modules/
+**/package-lock.json
+**/dist/
+
+# Tauri icons platform-specific
+desktop/src-tauri/icons/android/
+desktop/src-tauri/icons/ios/
+
+# OS
+.DS_Store
+
+# Logs
+*.log

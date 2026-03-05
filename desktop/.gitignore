@@ -1,0 +1,17 @@
+# Rust build artifacts
+src-tauri/target/
+
+# Node
+node_modules/
+package-lock.json
+dist/
+
+# Tauri bundles
+src-tauri/icons/android/
+src-tauri/icons/ios/
+
+# OS
+.DS_Store
+
+# Logs
+*.log

@@ -1,0 +1,716 @@
+@import "tailwindcss";
+@import "./styles/design-tokens.css";
+
+/* ========================================
+ * TAILWIND V4 - Theme customization for shadcn/ui
+ * Maps CSS variables to Tailwind color utilities
+ * ======================================== */
+@theme {
+  /* Background colors */
+  --color-background: #FFFFFF;
+  --color-foreground: #171717;
+
+  /* Popover/Dropdown - FOND BLANC */
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #171717;
+
+  /* Card */
+  --color-card: #FFFFFF;
+  --color-card-foreground: #171717;
+
+  /* Muted */
+  --color-muted: #F5F5F5;
+  --color-muted-foreground: #737373;
+
+  /* Accent (hover states) */
+  --color-accent: #F5F5F5;
+  --color-accent-foreground: #171717;
+
+  /* Primary */
+  --color-primary: #3B82F6;
+  --color-primary-foreground: #FFFFFF;
+
+  /* Secondary */
+  --color-secondary: #F5F5F5;
+  --color-secondary-foreground: #171717;
+
+  /* Destructive */
+  --color-destructive: #EF4444;
+  --color-destructive-foreground: #FFFFFF;
+
+  /* Border */
+  --color-border: #E5E5E5;
+  --color-input: #E5E5E5;
+  --color-ring: #3B82F6;
+}
+
+/* ========================================
+ * GILBERT - Global Styles
+ * Tech Premium + Business Pro + Gamifié
+ * ======================================== */
+
+:root {
+  font-family: var(--font-family);
+  line-height: var(--leading-normal);
+  font-weight: var(--font-normal);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+
+  /* Smooth font rendering */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* ========================================
+ * RESET & BASE STYLES
+ * ======================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg-primary);
+}
+
+/* Remove default focus outline, we use custom focus styles */
+*:focus {
+  outline: none;
+}
+
+/* Custom focus-visible for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--gilbert-500);
+  outline-offset: 2px;
+}
+
+/* ========================================
+ * CUSTOM SCROLLBAR - Élégant et discret
+ * ======================================== */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--neutral-300);
+  border-radius: var(--radius-full);
+  transition: var(--transition-fast);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--neutral-400);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--neutral-300) transparent;
+}
+
+/* ========================================
+ * SELECTION STYLE - Gilbert Blue
+ * ======================================== */
+
+::selection {
+  background: var(--gilbert-200);
+  color: var(--gilbert-900);
+}
+
+::-moz-selection {
+  background: var(--gilbert-200);
+  color: var(--gilbert-900);
+}
+
+/* ========================================
+ * TYPOGRAPHY ENHANCEMENTS
+ * ======================================== */
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-family-display);
+  font-weight: var(--font-semibold);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
+}
+
+p {
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+}
+
+a {
+  color: var(--text-link);
+  text-decoration: none;
+  transition: var(--transition-fast);
+}
+
+a:hover {
+  color: var(--text-link-hover);
+}
+
+/* ========================================
+ * FORM ELEMENTS BASE STYLES
+ * ======================================== */
+
+input, textarea, select, button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+}
+
+/* ========================================
+ * GILBERT-SPECIFIC GLOBAL STYLES
+ * ======================================== */
+
+/* Application container */
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Page transitions container */
+.page-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--duration-normal) var(--ease-out),
+              transform var(--duration-normal) var(--ease-out);
+}
+
+.page-exit {
+  opacity: 1;
+}
+
+.page-exit-active {
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-in);
+}
+
+/* ========================================
+ * LOADING STATES
+ * ======================================== */
+
+/* Skeleton loader base */
+.skeleton-text {
+  background: linear-gradient(
+    90deg,
+    var(--neutral-200) 25%,
+    var(--neutral-100) 50%,
+    var(--neutral-200) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-sm);
+  height: 1em;
+}
+
+.skeleton-circle {
+  background: linear-gradient(
+    90deg,
+    var(--neutral-200) 25%,
+    var(--neutral-100) 50%,
+    var(--neutral-200) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-full);
+}
+
+.skeleton-card {
+  background: linear-gradient(
+    90deg,
+    var(--neutral-200) 25%,
+    var(--neutral-100) 50%,
+    var(--neutral-200) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: var(--radius-lg);
+}
+
+/* ========================================
+ * GENERATION BANNER STYLES
+ * ======================================== */
+
+.generation-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--banner-height);
+  background: var(--banner-bg);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-4);
+  z-index: var(--z-banner);
+  box-shadow: var(--shadow-lg);
+  animation: slideInDown var(--duration-slow) var(--ease-spring);
+}
+
+.generation-banner__content {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.generation-banner__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.generation-banner__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.generation-banner__title {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.generation-banner__phrase {
+  font-size: var(--text-xs);
+  opacity: 0.9;
+  animation: fadeIn var(--duration-normal) var(--ease-out);
+}
+
+.generation-banner__progress {
+  flex-shrink: 0;
+  width: 100px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.generation-banner__progress-bar {
+  height: 100%;
+  background: white;
+  border-radius: var(--radius-full);
+  animation: progressIndeterminate 1.5s ease-in-out infinite;
+}
+
+.generation-banner__close {
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  transition: var(--transition-fast);
+  opacity: 0.8;
+}
+
+.generation-banner__close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 1;
+}
+
+/* Slide down animation */
+@keyframes slideInDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* ========================================
+ * RECORDING INDICATOR STYLES
+ * ======================================== */
+
+.recording-dot {
+  width: 12px;
+  height: 12px;
+  background: var(--color-recording);
+  border-radius: var(--radius-full);
+  position: relative;
+}
+
+.recording-dot::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: var(--radius-full);
+  background: var(--color-recording);
+  opacity: 0;
+  animation: pulseRing 1.5s ease-out infinite;
+}
+
+.recording-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--color-error-light);
+  color: var(--color-error);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ========================================
+ * DRAWING CANVAS STYLES (Summary Loading)
+ * ======================================== */
+
+/* Pencil cursor definition */
+:root {
+  --pencil-cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='%230A66FF' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z'/%3E%3C/svg%3E") 1 19, crosshair;
+}
+
+/* Force pencil cursor on the drawing canvas SVG */
+.drawing-canvas-svg {
+  cursor: var(--pencil-cursor) !important;
+}
+
+/* Ensure no child elements can override the cursor */
+.drawing-canvas-svg *,
+.drawing-canvas-svg *::before,
+.drawing-canvas-svg *::after {
+  cursor: inherit !important;
+}
+
+/* Apply pencil cursor to MUI Dialog content when loading screen is active */
+.MuiDialogContent-root:has(.drawing-canvas-svg) {
+  cursor: var(--pencil-cursor) !important;
+}
+
+.MuiDialogContent-root:has(.drawing-canvas-svg) * {
+  cursor: inherit !important;
+}
+
+/* ========================================
+ * AUDIO VISUALIZER STYLES
+ * ======================================== */
+
+.audio-visualizer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.audio-visualizer__bar {
+  width: 3px;
+  background: var(--gilbert-500);
+  border-radius: var(--radius-full);
+  animation: audioWave 0.8s ease-in-out infinite;
+}
+
+.audio-visualizer__bar:nth-child(1) { animation-delay: 0s; }
+.audio-visualizer__bar:nth-child(2) { animation-delay: 0.1s; }
+.audio-visualizer__bar:nth-child(3) { animation-delay: 0.2s; }
+.audio-visualizer__bar:nth-child(4) { animation-delay: 0.3s; }
+.audio-visualizer__bar:nth-child(5) { animation-delay: 0.4s; }
+
+.audio-visualizer--active .audio-visualizer__bar {
+  background: var(--color-recording);
+}
+
+.audio-visualizer--inactive .audio-visualizer__bar {
+  animation: none;
+  height: 4px;
+  opacity: 0.3;
+}
+
+/* ========================================
+ * MICROPHONE INDICATOR
+ * ======================================== */
+
+.mic-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: var(--neutral-100);
+  transition: var(--transition-normal);
+  position: relative;
+}
+
+.mic-indicator--active {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.mic-indicator--active::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--color-error);
+  animation: pulseRing 2s ease-out infinite;
+}
+
+.mic-indicator--speaking {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+/* ========================================
+ * SPEAKER COLORS (for transcript)
+ * ======================================== */
+
+.speaker-color-0 { --speaker-color: #3B82F6; }
+.speaker-color-1 { --speaker-color: #10B981; }
+.speaker-color-2 { --speaker-color: #F59E0B; }
+.speaker-color-3 { --speaker-color: #EF4444; }
+.speaker-color-4 { --speaker-color: #8B5CF6; }
+.speaker-color-5 { --speaker-color: #EC4899; }
+.speaker-color-6 { --speaker-color: #06B6D4; }
+.speaker-color-7 { --speaker-color: #84CC16; }
+
+.speaker-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: color-mix(in srgb, var(--speaker-color) 10%, transparent);
+  color: var(--speaker-color);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+}
+
+.speaker-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--speaker-color);
+}
+
+/* ========================================
+ * MEETING CARD ENHANCEMENTS
+ * ======================================== */
+
+.meeting-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+  transition: var(--transition-normal);
+  cursor: pointer;
+}
+
+.meeting-card:hover {
+  border-color: var(--gilbert-300);
+  box-shadow: var(--card-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.meeting-card--processing {
+  border-color: var(--gilbert-300);
+  background: linear-gradient(
+    135deg,
+    var(--card-bg) 0%,
+    var(--gilbert-50) 100%
+  );
+}
+
+.meeting-card--completed {
+  border-left: 3px solid var(--color-success);
+}
+
+.meeting-card--error {
+  border-left: 3px solid var(--color-error);
+}
+
+/* ========================================
+ * STATUS BADGES
+ * ======================================== */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+}
+
+.status-badge--processing {
+  background: var(--color-info-light);
+  color: var(--gilbert-700);
+}
+
+.status-badge--completed {
+  background: var(--color-success-light);
+  color: #047857;
+}
+
+.status-badge--error {
+  background: var(--color-error-light);
+  color: #B91C1C;
+}
+
+.status-badge--pending {
+  background: var(--color-warning-light);
+  color: #B45309;
+}
+
+/* ========================================
+ * TOAST / NOTIFICATION STYLES
+ * ======================================== */
+
+.toast {
+  position: fixed;
+  bottom: var(--space-6);
+  right: var(--space-6);
+  padding: var(--space-4);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  border: 1px solid var(--border-light);
+  z-index: var(--z-toast);
+  animation: fadeInUp var(--duration-normal) var(--ease-spring);
+}
+
+.toast--success {
+  border-left: 4px solid var(--color-success);
+}
+
+.toast--error {
+  border-left: 4px solid var(--color-error);
+}
+
+.toast--info {
+  border-left: 4px solid var(--gilbert-500);
+}
+
+/* ========================================
+ * EMPTY STATE STYLES
+ * ======================================== */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-12);
+  text-align: center;
+}
+
+.empty-state__icon {
+  width: 64px;
+  height: 64px;
+  color: var(--neutral-300);
+  margin-bottom: var(--space-4);
+}
+
+.empty-state__title {
+  font-size: var(--text-lg);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+}
+
+.empty-state__description {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  max-width: 320px;
+}
+
+/* ========================================
+ * RESPONSIVE UTILITIES
+ * Breakpoints: xs(0), sm(600), md(900), lg(1200), xl(1536)
+ * ======================================== */
+
+/* Mobile (< 600px) */
+@media (max-width: 599.95px) {
+  :root {
+    --sidebar-width: 100%;
+  }
+
+  .hide-mobile {
+    display: none !important;
+  }
+
+  /* Toast responsive pour mobile */
+  .toast {
+    left: var(--space-3);
+    right: var(--space-3);
+    bottom: var(--space-3);
+    max-width: none;
+  }
+}
+
+/* Tablet (600px - 899px) */
+@media (min-width: 600px) and (max-width: 899.95px) {
+  .hide-tablet {
+    display: none !important;
+  }
+}
+
+/* Desktop (>= 900px) */
+@media (min-width: 900px) {
+  .hide-desktop {
+    display: none !important;
+  }
+}
+
+/* Small screens (< 900px) - mobile + tablet */
+@media (max-width: 899.95px) {
+  .hide-small-screen {
+    display: none !important;
+  }
+}
+
+/* ========================================
+ * PRINT STYLES
+ * ======================================== */
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .generation-banner,
+  .sidebar,
+  .toast {
+    display: none !important;
+  }
+
+  body {
+    background: white;
+  }
+}
