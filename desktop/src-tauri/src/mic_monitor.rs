@@ -5,7 +5,7 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use sysinfo::{System, Process};
+use sysinfo::System;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
