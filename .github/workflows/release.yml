@@ -44,6 +44,23 @@ jobs:
         run: npm run tauri build -- --target aarch64-apple-darwin
         working-directory: desktop
 
+      - name: Fix Info.plist CFBundleExecutable
+        run: |
+          PLIST="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app/Contents/Info.plist"
+          if [ -f "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Gilbert" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleName Gilbert" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Gilbert" "$PLIST" || true
+            echo "CFBundleExecutable: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
+          fi
+          # Renommer l'exécutable si besoin
+          MACOS_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app/Contents/MacOS"
+          if [ -f "$MACOS_DIR/gilbert-desktop" ]; then
+            mv "$MACOS_DIR/gilbert-desktop" "$MACOS_DIR/Gilbert"
+            echo "✅ Exécutable renommé gilbert-desktop → Gilbert"
+          fi
+          codesign --force --deep --sign - "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app" || true
+
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
         with:
@@ -110,7 +127,9 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libasound2-dev \
+            pkg-config
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
