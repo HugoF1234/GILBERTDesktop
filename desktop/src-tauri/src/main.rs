@@ -163,7 +163,7 @@ async fn stop_record(
     match &process_result {
         Ok(_) => {
             println!("✅ [TAURI] stop_and_process succeeded");
-            let _ = Notification::new("com.gilbert.desktop")
+            let _ = Notification::new("com.gilbert.app")
                 .title("Gilbert Desktop")
                 .body("Enregistrement terminé")
                 .show();
@@ -171,7 +171,7 @@ async fn stop_record(
         Err(e) => {
             println!("⚠️ [TAURI] stop_and_process failed: {:?}", e);
             // Notification d'erreur mais on continue
-            let _ = Notification::new("com.gilbert.desktop")
+            let _ = Notification::new("com.gilbert.app")
                 .title("Gilbert Desktop")
                 .body("Enregistrement arrêté (erreur de traitement)")
                 .show();
@@ -358,7 +358,7 @@ fn request_system_audio_permission(state: tauri::State<'_, ArcAppState>) -> Resu
 #[tauri::command]
 async fn start_system_audio(state: tauri::State<'_, ArcAppState>) -> Result<StatusPayload, String> {
     state.start_system_audio().map_err(|e| e.to_string())?;
-    let _ = Notification::new("com.gilbert.desktop")
+    let _ = Notification::new("com.gilbert.app")
         .title("Gilbert Desktop")
         .body("Capture audio système démarrée")
         .show();
@@ -372,7 +372,7 @@ async fn stop_system_audio(state: tauri::State<'_, ArcAppState>) -> Result<Statu
     if let Some(path) = path {
         println!("System audio saved to: {:?}", path);
     }
-    let _ = Notification::new("com.gilbert.desktop")
+    let _ = Notification::new("com.gilbert.app")
         .title("Gilbert Desktop")
         .body("Capture audio système terminée")
         .show();
@@ -467,7 +467,7 @@ fn main() {
             // 1a. Notification permission
             println!("[PERMISSIONS] Requesting notification access...");
             flush_logs();
-            let _ = Notification::new("com.gilbert.desktop")
+            let _ = Notification::new("com.gilbert.app")
                 .title("Gilbert Desktop")
                 .body("Application démarrée")
                 .show();
@@ -501,7 +501,7 @@ fn main() {
             let api = ApiClient::new(http_client);
             let queue = QueueManager::load(dirs.queue_file.clone())
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            let app_identifier = "com.gilbert.desktop".to_string();
+            let app_identifier = "com.gilbert.app".to_string();
             let app_handle = app.handle();
             let state = AppState::new(dirs, api, queue, app_identifier.clone());
             
@@ -548,7 +548,7 @@ fn main() {
             // Démarrer le MicMonitor (détection micro + apps de visio via RMS)
             // ========================================
             {
-                let mut mic_monitor = MicMonitor::new("com.gilbert.desktop".to_string());
+                let mut mic_monitor = MicMonitor::new("com.gilbert.app".to_string());
                 match mic_monitor.start_with_app_handle(app.handle()) {
                     Ok(_) => println!("✅ MicMonitor démarré (détection micro actif)"),
                     Err(e) => println!("⚠️ MicMonitor non démarré (permission micro non accordée ou pas de device): {}", e),

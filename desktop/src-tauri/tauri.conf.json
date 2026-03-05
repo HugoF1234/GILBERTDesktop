@@ -13,7 +13,7 @@
   "tauri": {
     "bundle": {
       "active": true,
-      "identifier": "com.gilbert.desktop",
+      "identifier": "com.gilbert.app",
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

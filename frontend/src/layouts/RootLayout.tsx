@@ -16,7 +16,7 @@ import { getViewFromPath, VIEW_TO_PATH } from '../types/router';
 import type { ViewType } from '../types/router';
 import type { RouteContextType } from '../hooks/useRouteContext';
 import { recordingManager } from '../services/recordingManager';
-import { isTauriApp, onMicActivityDetected } from '../services/tauriRecordingService';
+import { isTauriApp } from '../services/tauriRecordingService';
 
 // Import des bannières
 import GenerationBanner from '../components/GenerationBanner';
@@ -54,19 +54,6 @@ function RootLayout(): React.ReactElement {
   // État de la sidebar
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
 
-  // Toast de détection de réunion (Tauri desktop uniquement)
-  const [showMeetingDetectedToast, setShowMeetingDetectedToast] = useState<boolean>(false);
-
-  // Souscrire à l'événement Tauri "mic-activity-detected" (réunion détectée)
-  useEffect(() => {
-    if (!isTauriApp()) return;
-    let unlisten: (() => void) | undefined;
-    onMicActivityDetected(() => {
-      setShowMeetingDetectedToast(true);
-      setTimeout(() => setShowMeetingDetectedToast(false), 6000);
-    }).then((fn) => { unlisten = fn; });
-    return () => { if (unlisten) unlisten(); };
-  }, []);
 
   // Onboarding Questionnaire & Tour : par utilisateur (backend pour questionnaire, localStorage par user pour le tour)
   const userId = currentUser?.id;
@@ -557,56 +544,6 @@ function RootLayout(): React.ReactElement {
           />
         )}
 
-        {/* Toast de détection de réunion (Tauri desktop) */}
-        {showMeetingDetectedToast && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 20,
-              right: 20,
-              padding: '16px 20px',
-              background: '#06b6d4',
-              color: '#fff',
-              borderRadius: 12,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-              zIndex: 9999,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 12,
-              minWidth: 280,
-              cursor: 'pointer',
-            }}
-            onClick={() => {
-              setShowMeetingDetectedToast(false);
-              navigate('/record');
-            }}
-          >
-            <span style={{ fontSize: 22 }}>🎙️</span>
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 3, fontSize: 15 }}>
-                Réunion détectée
-              </div>
-              <div style={{ fontSize: 13, opacity: 0.9 }}>
-                Cliquez pour démarrer l'enregistrement
-              </div>
-            </div>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowMeetingDetectedToast(false); }}
-              style={{
-                marginLeft: 'auto',
-                background: 'rgba(255,255,255,0.2)',
-                border: 'none',
-                borderRadius: 6,
-                color: '#fff',
-                padding: '4px 8px',
-                cursor: 'pointer',
-                fontSize: 13,
-              }}
-            >
-              ✕
-            </button>
-          </div>
-        )}
       </Box>
   );
 }

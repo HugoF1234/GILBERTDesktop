@@ -8,8 +8,9 @@ pub struct VideoAppDetector {
     pub app_identifier: String,
     pub app_handle: Arc<parking_lot::Mutex<Option<tauri::AppHandle>>>,
     last_notification: Arc<std::sync::atomic::AtomicU64>,
+    last_mic_notification: Arc<std::sync::atomic::AtomicU64>,
     is_recording: Arc<std::sync::atomic::AtomicBool>,
-    startup_time: Arc<std::sync::atomic::AtomicU64>, // Temps de démarrage pour éviter les notifs au lancement
+    startup_time: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl VideoAppDetector {
@@ -22,6 +23,7 @@ impl VideoAppDetector {
             app_identifier,
             app_handle: Arc::new(parking_lot::Mutex::new(None)),
             last_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_mic_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             is_recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_time: Arc::new(std::sync::atomic::AtomicU64::new(now)),
         }
@@ -40,6 +42,7 @@ impl VideoAppDetector {
             app_identifier,
             app_handle,
             last_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_mic_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             is_recording,
             startup_time: Arc::new(std::sync::atomic::AtomicU64::new(now)),
         }
@@ -229,14 +232,11 @@ impl VideoAppDetector {
 
     pub async fn start_detection_loop(&self) {
         let app_id = self.app_identifier.clone();
-        let last_notif = self.last_notification.clone();
+        let last_notif_meeting = self.last_notification.clone();
+        let last_notif_mic = self.last_mic_notification.clone();
         let is_recording = self.is_recording.clone();
         let startup_time = self.startup_time.clone();
 
-        let was_video_app_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let was_mic_in_use = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let was_video_app_clone = was_video_app_running.clone();
-        let was_mic_clone = was_mic_in_use.clone();
         // Timestamp du début de l'enregistrement actuel (pour notif 1h)
         let recording_start_ts: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let rec_start_clone = recording_start_ts.clone();
@@ -245,15 +245,21 @@ impl VideoAppDetector {
 
         // ── Tâche 1 : Détection apps de visio + micro any-app ────────────────
         tauri::async_runtime::spawn(async move {
-            sleep(Duration::from_secs(8)).await;
+            // Délai initial pour laisser l'app démarrer
+            sleep(Duration::from_secs(15)).await;
             println!("✅ Détection meetings + micro démarrée");
 
-            loop {
-                sleep(Duration::from_secs(5)).await;
+            // État précédent pour éviter les doublons
+            let mut prev_meeting_active = false;
+            let mut prev_mic_app: Option<String> = None;
 
+            loop {
+                sleep(Duration::from_secs(10)).await;
+
+                // Pas de notif si on enregistre déjà
                 if is_recording.load(std::sync::atomic::Ordering::SeqCst) {
-                    was_video_app_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                    was_mic_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                    prev_meeting_active = false;
+                    prev_mic_app = None;
                     continue;
                 }
 
@@ -262,51 +268,68 @@ impl VideoAppDetector {
                     .unwrap_or_default()
                     .as_secs();
 
+                // Pas de notif dans les 15 premières secondes après le démarrage
                 let startup = startup_time.load(std::sync::atomic::Ordering::SeqCst);
-                if now.saturating_sub(startup) < 10 {
+                if now.saturating_sub(startup) < 15 {
                     continue;
                 }
 
-                let last_notif_time = last_notif.load(std::sync::atomic::Ordering::SeqCst);
-                let cooldown_ok = now.saturating_sub(last_notif_time) >= 300; // 5 min
-
-                // ── Cas 1 : app de visio en call actif ───────────────────────
+                // ── Cas 1 : app de visio EN CALL actif ───────────────────────
                 let video_app = Self::get_running_video_app();
-                let in_call = Self::is_in_active_call();
-                let was_video = was_video_app_clone.load(std::sync::atomic::Ordering::SeqCst);
+                let in_call = if video_app.is_some() { Self::is_in_active_call() } else { false };
 
                 if let Some(ref app_name) = video_app {
-                    if in_call && !was_video && cooldown_ok {
-                        println!("🎙️ Meeting détecté: {}", app_name);
-                        let _ = Notification::new(&app_id)
-                            .title("Gilbert — Réunion détectée")
-                            .body(&format!("{} est actif — Voulez-vous prendre des notes ?", app_name))
-                            .show();
-                        last_notif.store(now, std::sync::atomic::Ordering::SeqCst);
-                        was_video_app_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                    } else if !in_call {
-                        was_video_app_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-                    }
-                } else {
-                    was_video_app_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                    if in_call {
+                        // Notifier seulement si : (1) pas notifié avant, (2) cooldown 10 min respecté
+                        let last_meeting = last_notif_meeting.load(std::sync::atomic::Ordering::SeqCst);
+                        let cooldown_ok = now.saturating_sub(last_meeting) >= 600; // 10 min
 
-                    // ── Cas 2 : micro ouvert par n'importe quelle app ────────
-                    let mic_app = Self::get_app_using_mic();
-                    let was_mic = was_mic_clone.load(std::sync::atomic::Ordering::SeqCst);
-
-                    if let Some(ref mic_app_name) = mic_app {
-                        if !was_mic && cooldown_ok {
-                            println!("🎤 Micro détecté utilisé par: {}", mic_app_name);
+                        if !prev_meeting_active && cooldown_ok {
+                            println!("🎙️ Meeting détecté: {}", app_name);
                             let _ = Notification::new(&app_id)
-                                .title("Gilbert — Micro actif")
-                                .body(&format!("{} utilise votre micro — Démarrer un enregistrement ?", mic_app_name))
+                                .title("Gilbert — Réunion détectée")
+                                .body(&format!("{} — Voulez-vous enregistrer cette réunion ?", app_name))
                                 .show();
-                            last_notif.store(now, std::sync::atomic::Ordering::SeqCst);
-                            was_mic_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                            last_notif_meeting.store(now, std::sync::atomic::Ordering::SeqCst);
                         }
-                    } else {
-                        was_mic_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+                        prev_meeting_active = true;
+                        prev_mic_app = None;
+                        continue;
                     }
+                }
+
+                // Pas de call actif → reset état réunion
+                prev_meeting_active = false;
+
+                // ── Cas 2 : micro ouvert par n'importe quelle app (hors visio) ──
+                let mic_app = Self::get_app_using_mic();
+
+                // Filtrer les apps de visio (déjà gérées au-dessus)
+                let mic_app_filtered = mic_app.as_ref().and_then(|name| {
+                    let lower = name.to_lowercase();
+                    let is_video = Self::VIDEO_APPS.iter().any(|(p, _)| lower.contains(p));
+                    // Aussi filtrer Gilbert lui-même
+                    let is_gilbert = lower.contains("gilbert");
+                    if is_video || is_gilbert { None } else { Some(name.clone()) }
+                });
+
+                if let Some(ref mic_name) = mic_app_filtered {
+                    // Notifier seulement si c'est une nouvelle app (différente de la précédente)
+                    let is_new_app = prev_mic_app.as_deref() != Some(mic_name.as_str());
+                    let last_mic = last_notif_mic.load(std::sync::atomic::Ordering::SeqCst);
+                    let cooldown_ok = now.saturating_sub(last_mic) >= 600; // 10 min
+
+                    if is_new_app && cooldown_ok {
+                        println!("🎤 Micro actif: {}", mic_name);
+                        let _ = Notification::new(&app_id)
+                            .title("Gilbert — Micro actif")
+                            .body(&format!("{} utilise votre micro — Démarrer un enregistrement ?", mic_name))
+                            .show();
+                        last_notif_mic.store(now, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    prev_mic_app = Some(mic_name.clone());
+                } else {
+                    prev_mic_app = None;
                 }
             }
         });
@@ -314,10 +337,9 @@ impl VideoAppDetector {
         // ── Tâche 2 : Notif si recording > 1h ────────────────────────────────
         tauri::async_runtime::spawn(async move {
             loop {
-                sleep(Duration::from_secs(60)).await; // vérifier chaque minute
+                sleep(Duration::from_secs(60)).await;
 
                 if !is_recording_for_timer.load(std::sync::atomic::Ordering::SeqCst) {
-                    // Reset le timestamp quand on n'enregistre plus
                     rec_start_clone.store(0, std::sync::atomic::Ordering::SeqCst);
                     continue;
                 }
@@ -330,7 +352,6 @@ impl VideoAppDetector {
                 let start = rec_start_clone.load(std::sync::atomic::Ordering::SeqCst);
 
                 if start == 0 {
-                    // Premier tick depuis le début de l'enregistrement → enregistrer le timestamp
                     rec_start_clone.store(now, std::sync::atomic::Ordering::SeqCst);
                     continue;
                 }
@@ -358,4 +379,3 @@ impl VideoAppDetector {
         }
     }
 }
-
