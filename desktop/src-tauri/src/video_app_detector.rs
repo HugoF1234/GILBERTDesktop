@@ -83,59 +83,67 @@ impl VideoAppDetector {
     ];
 
     /// Détecte quelle app utilise le micro en ce moment (macOS uniquement)
-    /// Utilise `lsof` sur le device audio d'entrée
+    /// Utilise plusieurs méthodes complémentaires
     #[cfg(target_os = "macos")]
     fn get_app_using_mic() -> Option<String> {
-        // Cherche les processus qui ont ouvert le device audio d'entrée
+        // Méthode 1 : surveiller le privacy indicator via IOKit
+        // Sur macOS 12+, l'indicateur orange du micro correspond à une entrée dans IOKit
+        let out1 = Command::new("sh")
+            .arg("-c")
+            .arg(r#"
+                ioreg -l 2>/dev/null | grep -i "IsCapturing\|MicCapturing\|AudioCapturing" | grep -v "^$" | head -3
+            "#)
+            .output()
+            .ok();
+        if let Some(o) = out1 {
+            let s = String::from_utf8_lossy(&o.stdout);
+            if s.contains("1") && s.contains("Capturing") {
+                // Micro actif — trouver l'app via lsof sur coreaudiod connections
+                if let Some(app) = Self::get_app_via_lsof() {
+                    return Some(app);
+                }
+            }
+        }
+
+        // Méthode 2 : détecter via lsof les processus connectés à coreaudiod
+        Self::get_app_via_lsof()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_app_via_lsof() -> Option<String> {
+        // Chercher les processus qui ont des connexions audio actives
+        // via les sockets unix de coreaudiod
         let output = Command::new("sh")
             .arg("-c")
-            .arg("lsof /dev/osxspeex /dev/osxsnd 2>/dev/null | awk 'NR>1 {print $1}' | sort -u | head -5 || true")
+            .arg(r#"
+                lsof 2>/dev/null | grep -iE "coreaudio|avfoundation|audio" \
+                  | grep -v "dylib\|framework\|\.so\|grep\|Gilbert\|lsof\|loginwindow\|WindowServer\|Dock\|Finder\|kernel\|launchd" \
+                  | awk '{print $1}' | sort | uniq -c | sort -rn | head -5 \
+                  | awk '{print $2}'
+            "#)
             .output()
             .ok()?;
 
-        let apps = String::from_utf8_lossy(&output.stdout);
-        let app = apps.lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter(|l| !l.contains("lsof") && !l.contains("sh"))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let blacklist = ["lsof", "sh", "awk", "grep", "sort", "uniq",
+                        "Gilbert", "loginwindow", "WindowServer", "Dock",
+                        "Finder", "kernel", "launchd", "coreaudiod", ""];
+
+        stdout.lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .filter(|l| !blacklist.contains(l))
             .next()
-            .map(|s| s.trim().to_string());
-
-        // Méthode 2 : via CoreAudio avec osascript
-        if app.is_none() {
-            let out2 = Command::new("osascript")
-                .arg("-e")
-                .arg(r#"
-                    try
-                        set result to ""
-                        tell application "System Events"
-                            repeat with proc in application processes
-                                try
-                                    if (count of (audio devices of proc)) > 0 then
-                                        set result to result & name of proc & "\n"
-                                    end if
-                                end try
-                            end repeat
-                        end tell
-                        return result
-                    end try
-                    return ""
-                "#)
-                .output()
-                .ok()?;
-            let names = String::from_utf8_lossy(&out2.stdout);
-            let name = names.lines()
-                .filter(|l| !l.trim().is_empty())
-                .filter(|l| !l.eq_ignore_ascii_case("Gilbert"))
-                .next()
-                .map(|s| s.trim().to_string());
-            return name;
-        }
-
-        app
+            .map(|s| s.to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
     fn get_app_using_mic() -> Option<String> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn get_app_via_lsof() -> Option<String> {
         None
     }
 

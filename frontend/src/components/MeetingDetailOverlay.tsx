@@ -48,6 +48,7 @@ const TipTapEditor = lazy(() => import('./TipTapEditor'));
 const DrawingCanvas = lazy(() => import('./ui/DrawingCanvas'));
 import SummaryGenerator from './SummaryGenerator';
 import { Template } from '../services/templateService';
+import { getAssetUrl } from '../services/apiClient';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGenerationStore } from '../stores/generationStore';
 import sounds from '../utils/soundDesign';
@@ -345,7 +346,7 @@ const RegenerateDropdown: React.FC<RegenerateDropdownProps> = ({
           >
             <Box
               component="img"
-              src={selectedTemplate?.logo_url || '/img/icon.png'}
+              src={getAssetUrl(selectedTemplate?.logo_url) || '/img/icon.png'}
               alt=""
               draggable={false}
               sx={{ width: 20, height: 20, objectFit: 'contain' }}
@@ -437,7 +438,7 @@ const RegenerateDropdown: React.FC<RegenerateDropdownProps> = ({
                   >
                     <Box
                       component="img"
-                      src={template.logo_url || '/img/icon.png'}
+                      src={getAssetUrl(template.logo_url) || '/img/icon.png'}
                       alt=""
                       draggable={false}
                       sx={{ width: 18, height: 18, objectFit: 'contain' }}

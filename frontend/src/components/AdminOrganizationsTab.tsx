@@ -67,7 +67,7 @@ import {
   type OrganizationTemplate,
 } from '../services/organizationService';
 import { getAdminUsers } from '../services/meetingService';
-import apiClient from '../services/apiClient';
+import apiClient, { getAssetUrl } from '../services/apiClient';
 import { logger } from '@/utils/logger';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gilbert.lexiapro.fr';
@@ -1024,7 +1024,7 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                 {template.logo_url && (
                                   <Avatar
-                                    src={`${API_BASE_URL}${template.logo_url}`}
+                                    src={getAssetUrl(template.logo_url)}
                                     variant="rounded"
                                     sx={{ width: 32, height: 32 }}
                                   />

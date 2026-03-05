@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Box, Typography, alpha, useTheme } from '@mui/material';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Template } from '../services/templateService';
+import { getAssetUrl } from '../services/apiClient';
 
 interface SummaryGeneratorProps {
   templates: Template[];
@@ -212,7 +213,7 @@ const SummaryGenerator: React.FC<SummaryGeneratorProps> = ({
                       >
                         <Box
                           component="img"
-                          src={template.logo_url || '/img/icon.png'}
+                          src={getAssetUrl(template.logo_url) || '/img/icon.png'}
                           alt=""
                           draggable={false}
                           sx={{

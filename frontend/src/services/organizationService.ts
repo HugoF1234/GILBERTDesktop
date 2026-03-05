@@ -1,10 +1,11 @@
 /**
  * Service pour gérer les organisations
  */
-import apiClient from './apiClient';
+import apiClient, { getAssetUrl } from './apiClient';
 import { logger } from '@/utils/logger';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gilbert.lexiapro.fr';
+// Note: API_BASE_URL used only for backward compat in this file
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gilbert-assistant.ovh';
 
 // ==================== Types ====================
 
@@ -188,8 +189,6 @@ export async function getOrganizationTemplates(organizationId: string): Promise<
 // ==================== Helper pour les URLs d'images ====================
 
 export function getOrganizationLogoUrl(logoUrl?: string | null): string | undefined {
-  if (!logoUrl) return undefined;
-  if (logoUrl.startsWith('http')) return logoUrl;
-  return `${API_BASE_URL}${logoUrl}`;
+  return getAssetUrl(logoUrl);
 }
 

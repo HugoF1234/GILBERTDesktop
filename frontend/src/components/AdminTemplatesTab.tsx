@@ -56,6 +56,7 @@ import TemplateAssignmentDialog from './TemplateAssignmentDialog';
 import TemplateLayoutForm from './TemplateLayoutForm';
 import { LayoutConfig, defaultLayoutConfig } from '../types/templateLayout';
 import { logger } from '@/utils/logger';
+import { getAssetUrl } from '../services/apiClient';
 
 interface AdminTemplatesTabProps {
   loading?: boolean;
@@ -239,7 +240,7 @@ const TemplateFormContent = React.memo<TemplateFormContentProps>(({
               {logoPreview && (
                   <div className="relative">
                   <img
-                      src={logoPreview.startsWith('data:') ? logoPreview : `${import.meta.env.VITE_API_BASE_URL || 'https://gilbert-assistant.ovh'}${logoPreview.startsWith('/') ? '' : '/'}${logoPreview}`}
+                      src={logoPreview.startsWith('data:') ? logoPreview : (getAssetUrl(logoPreview) || logoPreview)}
                     alt="Aperçu du logo"
                       className="h-16 w-auto object-contain border border-slate-200 rounded p-1"
                     />
@@ -747,7 +748,7 @@ const AdminTemplatesTab: React.FC<AdminTemplatesTabProps> = ({
                               <div className="flex items-center gap-3">
                                 {template.logo_url && !logoErrors.has(template.id) ? (
                                   <img
-                                    src={template.logo_url.startsWith('http') ? template.logo_url : `${import.meta.env.VITE_API_BASE_URL || 'https://gilbert-assistant.ovh'}${template.logo_url.startsWith('/') ? '' : '/'}${template.logo_url}`}
+                                    src={getAssetUrl(template.logo_url) || ''}
                                     alt={template.name}
                                     className="w-10 h-10 object-contain rounded-lg border border-slate-200 p-1"
                                     onError={() => {

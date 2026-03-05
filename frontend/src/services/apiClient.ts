@@ -3,6 +3,18 @@ import { logger } from '@/utils/logger';
 // Base URL for API calls - utilise VITE_API_BASE_URL pour le développement local
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gilbert-assistant.ovh';
 
+/**
+ * Convertit une URL de logo/image (relative ou absolue) en URL complète vers le backend.
+ * Utile pour les logos d'organisation, de template, etc. uploadés via l'API.
+ */
+export function getAssetUrl(url?: string | null): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  const base = API_BASE_URL.replace(/\/$/, '');
+  const path = url.startsWith('/') ? url : `/${url}`;
+  return `${base}${path}`;
+}
+
 // Classe d'erreur personnalisée pour les erreurs réseau (offline)
 export class NetworkError extends Error {
   constructor(message: string) {
