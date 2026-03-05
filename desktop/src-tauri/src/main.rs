@@ -10,6 +10,7 @@ use gilbert_desktop_lib::{
     api::ApiClient,
     background_sync,
     config::AppDirs,
+    mic_monitor::MicMonitor,
     queue::QueueManager,
     state::{AppState, StatusPayload},
     video_app_detector::VideoAppDetector,
@@ -542,6 +543,20 @@ fn main() {
             let app_handle_for_sync = app.handle();
             background_sync::spawn_background_sync(state_for_sync, app_handle_for_sync);
             println!("✅ Background sync démarré (auto-retry uploads toutes les 30s)");
+
+            // ========================================
+            // Démarrer le MicMonitor (détection micro + apps de visio via RMS)
+            // ========================================
+            {
+                let mut mic_monitor = MicMonitor::new("com.gilbert.desktop".to_string());
+                match mic_monitor.start_with_app_handle(app.handle()) {
+                    Ok(_) => println!("✅ MicMonitor démarré (détection micro actif)"),
+                    Err(e) => println!("⚠️ MicMonitor non démarré (permission micro non accordée ou pas de device): {}", e),
+                }
+                // On laisse le monitor se gérer seul (le stream reste actif tant que mic_monitor vit)
+                // On le leak intentionnellement pour qu'il dure toute la session
+                std::mem::forget(mic_monitor);
+            }
 
             // Tauri gère automatiquement les Arc
             app.manage(state_arc);

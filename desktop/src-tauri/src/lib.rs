@@ -1,6 +1,7 @@
 pub mod api;
 pub mod background_sync;
 pub mod config;
+pub mod mic_monitor;
 pub mod network;
 pub mod queue;
 pub mod recorder;
