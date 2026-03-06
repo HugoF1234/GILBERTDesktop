@@ -22,6 +22,10 @@ bool sck_has_permission(void);
 // Request screen recording permission (will show system dialog)
 bool sck_request_permission(void);
 
+// Microphone permission (TCC persistent)
+void request_microphone_permission(void);
+bool has_microphone_permission(void);
+
 // Set callbacks for audio data and errors
 void sck_set_callbacks(AudioDataCallback audioCallback, ErrorCallback errorCallback);
 

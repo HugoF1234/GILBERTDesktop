@@ -74,6 +74,34 @@ public func sck_request_permission() -> Bool {
     return granted
 }
 
+// MARK: - Microphone permission (TCC persistant)
+
+@_cdecl("request_microphone_permission")
+public func request_microphone_permission() {
+    // Vérifie d'abord silencieusement
+    let status = AVCaptureDevice.authorizationStatus(for: .audio)
+    switch status {
+    case .authorized:
+        print("[PERMISSIONS] Microphone already granted ✅")
+        return
+    case .notDetermined:
+        print("[PERMISSIONS] Requesting microphone access...")
+        // requestAccess écrit dans TCC de façon persistante
+        AVCaptureDevice.requestAccess(for: .audio) { granted in
+            print("[PERMISSIONS] Microphone: \(granted ? "✅ granted" : "⚠️ denied")")
+        }
+    case .denied, .restricted:
+        print("[PERMISSIONS] Microphone denied — user must enable in System Settings")
+    @unknown default:
+        break
+    }
+}
+
+@_cdecl("has_microphone_permission")
+public func has_microphone_permission() -> Bool {
+    return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+}
+
 @_cdecl("sck_set_callbacks")
 public func sck_set_callbacks(
     audioCallback: AudioDataCallback?,

@@ -29,6 +29,8 @@ fn request_screen_recording_permission() -> bool {
         fn sck_is_available() -> bool;
         fn sck_has_permission() -> bool;
         fn sck_request_permission() -> bool;
+        fn request_microphone_permission();
+        fn has_microphone_permission() -> bool;
     }
 
     println!("[PERMISSIONS] Checking Screen Recording permission...");
@@ -67,6 +69,26 @@ fn request_screen_recording_permission() -> bool {
     flush_logs();
     granted
 }
+
+/// Request Microphone permission at startup (macOS)
+#[cfg(target_os = "macos")]
+fn request_microphone_permission_startup() {
+    extern "C" {
+        fn request_microphone_permission();
+        fn has_microphone_permission() -> bool;
+    }
+    let has = unsafe { has_microphone_permission() };
+    if has {
+        println!("[PERMISSIONS] ✅ Microphone already granted");
+    } else {
+        println!("[PERMISSIONS] Requesting Microphone permission...");
+        unsafe { request_microphone_permission() };
+    }
+    flush_logs();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_microphone_permission_startup() {}
 
 #[cfg(not(target_os = "macos"))]
 fn request_screen_recording_permission() -> bool {
@@ -474,12 +496,16 @@ fn main() {
             println!("[PERMISSIONS] ✅ Notification sent");
             flush_logs();
 
-            // 1b. Screen Recording permission for system audio — demande au premier lancement
+            // 1b. Microphone permission — demandée au démarrage une fois pour toutes
+            request_microphone_permission_startup();
+
+            // 1c. Screen Recording permission for system audio — demande au premier lancement
             let screen_ok = request_screen_recording_permission();
 
             println!("\n========================================");
             println!("       PERMISSIONS SUMMARY");
             println!("========================================");
+            println!("  Microphone:       ✅ demandée");
             println!("  Screen Recording: {}", if screen_ok { "✅ OK" } else { "⚠️ PENDING/DENIED" });
             println!("========================================\n");
             flush_logs();
