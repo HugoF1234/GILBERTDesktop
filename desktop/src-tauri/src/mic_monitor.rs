@@ -11,7 +11,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, Stream,
 };
-use tauri::{api::notification::Notification, Manager};
+use tauri::api::notification::Notification;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -35,6 +35,11 @@ pub struct MicMonitor {
 // cpal streams are not marked Send/Sync on all platforms
 unsafe impl Send for MicMonitor {}
 unsafe impl Sync for MicMonitor {}
+
+const VIDEO_APPS: &[&str] = &[
+    "discord", "zoom", "teams", "slack", "webex",
+    "facetime", "skype", "whereby", "around", "loom", "riverside",
+];
 
 impl MicMonitor {
     pub fn new(app_identifier: String) -> Self {
@@ -70,192 +75,80 @@ impl MicMonitor {
         let monitoring_flag = self.monitoring.clone();
         let last_notif = self.last_notification.clone();
         let app_id = self.app_identifier.clone();
-        let app_handle = self.app_handle.clone();
 
-        // Seuil RMS pour détecter l'activité (ajustable)
-        const RMS_THRESHOLD: f32 = 0.001; // Seuil plus sensible
-        const ACTIVITY_DURATION_MS: u64 = 300; // Détecter activité pendant 300ms
-        const COOLDOWN_SECONDS: u64 = 20; // Cooldown 20s pour tester plus vite
-        
-        // Apps de visio à détecter
-        let video_apps = vec!["Microsoft Teams", "Zoom", "zoom", "Google Chrome", "Google Meet", "Slack", "Discord"];
+        // Seuil RMS : détecte une vraie activité vocale (pas juste le bruit de fond)
+        const RMS_THRESHOLD: f32 = 0.005;
+        // Durée minimale d'activité avant de notifier (évite les faux positifs)
+        const ACTIVITY_DURATION_MS: u64 = 500;
+        // Cooldown entre deux notifications : 10 minutes
+        const COOLDOWN_SECS: u64 = 600;
 
-        let activity_start: Arc<parking_lot::Mutex<Option<Instant>>> = Arc::new(parking_lot::Mutex::new(None));
+        let activity_start: Arc<parking_lot::Mutex<Option<Instant>>> =
+            Arc::new(parking_lot::Mutex::new(None));
 
-        let stream = match config.sample_format() {
-            SampleFormat::F32 => {
-                let activity = activity_start.clone();
-                let video_apps_clone = video_apps.clone();
-                Self::build_monitor_stream_f32(
-                    &device,
-                    config.into(),
-                    monitoring_flag.clone(),
-                    move |rms| {
-                        let now = Instant::now();
-                        let now_system = SystemTime::now();
-                        let last_notif_time = last_notif.load(Ordering::SeqCst);
-                        let elapsed = if last_notif_time > 0 {
-                            let last_notif_system = UNIX_EPOCH + Duration::from_secs(last_notif_time);
-                            now_system.duration_since(last_notif_system).unwrap_or(Duration::ZERO).as_secs()
-                        } else {
-                            COOLDOWN_SECONDS + 1 // Force la première notification
-                        };
+        let on_rms = {
+            let activity = activity_start.clone();
+            move |rms: f32| {
+                let now = Instant::now();
+                let now_sys = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
 
-                        // Vérifier si une app de visio est active
-                        let mut sys = System::new();
-                        sys.refresh_processes();
-                        let has_video_app = sys.processes().values().any(|process| {
-                            let name = process.name().to_lowercase();
-                            video_apps_clone.iter().any(|app| name.contains(&app.to_lowercase()))
-                        });
-                        
-                        // Si app de visio active ET activité micro détectée
-                        if has_video_app && rms > RMS_THRESHOLD {
-                            let mut activity_guard = activity.lock();
-                            if let Some(start) = *activity_guard {
-                                if now.duration_since(start).as_millis() as u64 >= ACTIVITY_DURATION_MS {
-                                    // Activité détectée pendant assez longtemps
-                                    if elapsed >= COOLDOWN_SECONDS {
-                                        // Envoyer notification
-                                        println!("🔔 Notification envoyée - RMS: {:.4}, Durée: {}ms, App visio détectée", rms, now.duration_since(start).as_millis());
-                                        let _ = Notification::new(&app_id)
-                                            .title("Gilbert Desktop")
-                                            .body("Réunion détectée - Démarrer l'enregistrement ?")
-                                            .show();
-                                        
-                                        // Envoyer aussi un event Tauri pour afficher un toast dans l'UI
-                                        if let Some(ref handle) = app_handle {
-                                            let _ = handle.emit_all("mic-activity-detected", ());
-                                        }
-                                        
-                                        let timestamp = now_system.duration_since(UNIX_EPOCH).unwrap().as_secs();
-                                        last_notif.store(timestamp, Ordering::SeqCst);
-                                        *activity_guard = None; // Reset pour éviter spam
+                if rms > RMS_THRESHOLD {
+                    let mut guard = activity.lock();
+                    match *guard {
+                        None => {
+                            *guard = Some(now);
+                        }
+                        Some(start) => {
+                            let active_ms = now.duration_since(start).as_millis() as u64;
+                            if active_ms >= ACTIVITY_DURATION_MS {
+                                // Vérifier cooldown
+                                let last = last_notif.load(Ordering::SeqCst);
+                                if now_sys.saturating_sub(last) >= COOLDOWN_SECS {
+                                    // Détecter si c'est une app de visio via sysinfo
+                                    let mut sys = System::new();
+                                    sys.refresh_processes();
+                                    let video_app = sys.processes().values().find_map(|p| {
+                                        let name = p.name().to_lowercase();
+                                        VIDEO_APPS.iter().find(|&&v| name.contains(v))
+                                            .map(|v| v.to_string())
+                                    });
+
+                                    let (title, body) = if let Some(ref app_name) = video_app {
+                                        (
+                                            "Gilbert — Réunion détectée".to_string(),
+                                            format!("{} actif — Voulez-vous enregistrer ?",
+                                                capitalize(app_name)),
+                                        )
                                     } else {
-                                        println!("⏳ Cooldown actif - {}s restants", COOLDOWN_SECONDS - elapsed);
-                                    }
-                                }
-                            } else {
-                                *activity_guard = Some(now);
-                            }
-                        } else if !has_video_app {
-                            // Pas d'app de visio, reset l'activité
-                            *activity.lock() = None;
-                        } else {
-                            // App de visio mais pas d'activité audio encore
-                            *activity.lock() = None;
-                        }
-                    },
-                )
-            },
-            SampleFormat::I16 => {
-                let activity = activity_start.clone();
-                let video_apps_clone = video_apps.clone();
-                Self::build_monitor_stream_i16(
-                    &device,
-                    config.into(),
-                    monitoring_flag.clone(),
-                    move |rms| {
-                        let now = Instant::now();
-                        let now_system = SystemTime::now();
-                        let last_notif_time = last_notif.load(Ordering::SeqCst);
-                        let elapsed = if last_notif_time > 0 {
-                            let last_notif_system = UNIX_EPOCH + Duration::from_secs(last_notif_time);
-                            now_system.duration_since(last_notif_system).unwrap_or(Duration::ZERO).as_secs()
-                        } else {
-                            COOLDOWN_SECONDS + 1
-                        };
+                                        (
+                                            "Gilbert — Micro actif".to_string(),
+                                            "Votre micro est actif — Démarrer un enregistrement ?".to_string(),
+                                        )
+                                    };
 
-                        // Vérifier si une app de visio est active
-                        let mut sys = System::new();
-                        sys.refresh_processes();
-                        let has_video_app = sys.processes().values().any(|process| {
-                            let name = process.name().to_lowercase();
-                            video_apps_clone.iter().any(|app| name.contains(&app.to_lowercase()))
-                        });
-                        
-                        if has_video_app && rms > RMS_THRESHOLD {
-                            let mut activity_guard = activity.lock();
-                            if let Some(start) = *activity_guard {
-                                if now.duration_since(start).as_millis() as u64 >= ACTIVITY_DURATION_MS {
-                                    if elapsed >= COOLDOWN_SECONDS {
-                                        println!("🔔 Notification envoyée - RMS: {:.4}, Durée: {}ms, App visio détectée", rms, now.duration_since(start).as_millis());
-                                        let _ = Notification::new(&app_id)
-                                            .title("Gilbert Desktop")
-                                            .body("Réunion détectée - Démarrer l'enregistrement ?")
-                                            .show();
-                                        if let Some(ref handle) = app_handle {
-                                            let _ = handle.emit_all("mic-activity-detected", ());
-                                        }
-                                        let timestamp = now_system.duration_since(UNIX_EPOCH).unwrap().as_secs();
-                                        last_notif.store(timestamp, Ordering::SeqCst);
-                                        *activity_guard = None;
-                                    }
-                                }
-                            } else {
-                                *activity_guard = Some(now);
-                            }
-                        } else {
-                            *activity.lock() = None;
-                        }
-                    },
-                )
-            },
-            SampleFormat::U16 => {
-                let activity = activity_start.clone();
-                let video_apps_clone = video_apps.clone();
-                Self::build_monitor_stream_u16(
-                    &device,
-                    config.into(),
-                    monitoring_flag.clone(),
-                    move |rms| {
-                        let now = Instant::now();
-                        let now_system = SystemTime::now();
-                        let last_notif_time = last_notif.load(Ordering::SeqCst);
-                        let elapsed = if last_notif_time > 0 {
-                            let last_notif_system = UNIX_EPOCH + Duration::from_secs(last_notif_time);
-                            now_system.duration_since(last_notif_system).unwrap_or(Duration::ZERO).as_secs()
-                        } else {
-                            COOLDOWN_SECONDS + 1
-                        };
+                                    println!("🔔 Notif: {} | RMS={:.4}", title, rms);
+                                    let _ = Notification::new(&app_id)
+                                        .title(&title)
+                                        .body(&body)
+                                        .show();
 
-                        // Vérifier si une app de visio est active
-                        let mut sys = System::new();
-                        sys.refresh_processes();
-                        let has_video_app = sys.processes().values().any(|process| {
-                            let name = process.name().to_lowercase();
-                            video_apps_clone.iter().any(|app| name.contains(&app.to_lowercase()))
-                        });
-                        
-                        if has_video_app && rms > RMS_THRESHOLD {
-                            let mut activity_guard = activity.lock();
-                            if let Some(start) = *activity_guard {
-                                if now.duration_since(start).as_millis() as u64 >= ACTIVITY_DURATION_MS {
-                                    if elapsed >= COOLDOWN_SECONDS {
-                                        println!("🔔 Notification envoyée - RMS: {:.4}, Durée: {}ms, App visio détectée", rms, now.duration_since(start).as_millis());
-                                        let _ = Notification::new(&app_id)
-                                            .title("Gilbert Desktop")
-                                            .body("Réunion détectée - Démarrer l'enregistrement ?")
-                                            .show();
-                                        if let Some(ref handle) = app_handle {
-                                            let _ = handle.emit_all("mic-activity-detected", ());
-                                        }
-                                        let timestamp = now_system.duration_since(UNIX_EPOCH).unwrap().as_secs();
-                                        last_notif.store(timestamp, Ordering::SeqCst);
-                                        *activity_guard = None;
-                                    }
+                                    last_notif.store(now_sys, Ordering::SeqCst);
+                                    *guard = None; // reset pour éviter le spam
                                 }
-                            } else {
-                                *activity_guard = Some(now);
                             }
-                        } else {
-                            *activity.lock() = None;
                         }
-                    },
-                )
-            },
-            _ => Err(MonitorError::Audio("unsupported sample format".into())),
-        }?;
+                    }
+                } else {
+                    // Silence → reset l'activité
+                    *activity.lock() = None;
+                }
+            }
+        };
+
+        let stream = Self::build_stream(&device, config, monitoring_flag.clone(), on_rms)?;
 
         stream
             .play()
@@ -263,105 +156,69 @@ impl MicMonitor {
 
         self.monitoring.store(true, Ordering::SeqCst);
         self.stream = Some(stream);
-        println!("✅ Monitor micro actif - écoute en cours...");
+        println!("✅ MicMonitor actif — seuil RMS={}, cooldown={}min", RMS_THRESHOLD, COOLDOWN_SECS / 60);
         Ok(())
     }
 
-    fn build_monitor_stream_f32<F>(
+    fn build_stream<F>(
         device: &cpal::Device,
-        config: cpal::StreamConfig,
+        config: cpal::SupportedStreamConfig,
         monitoring_flag: Arc<AtomicBool>,
         mut on_rms: F,
     ) -> Result<Stream, MonitorError>
     where
         F: FnMut(f32) + Send + 'static,
     {
-        let err_fn = |err| eprintln!("mic monitor error: {}", err);
-        device
-            .build_input_stream(
-                &config,
-                move |data: &[f32], _| {
-                    if !monitoring_flag.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    // Calculer RMS (Root Mean Square)
-                    let sum_squares: f32 = data.iter().map(|&x| x * x).sum();
-                    let rms = (sum_squares / data.len() as f32).sqrt();
-                    on_rms(rms);
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| MonitorError::Audio(e.to_string()))
-    }
+        let err_fn = |err| eprintln!("mic monitor stream error: {}", err);
 
-    fn build_monitor_stream_i16<F>(
-        device: &cpal::Device,
-        config: cpal::StreamConfig,
-        monitoring_flag: Arc<AtomicBool>,
-        mut on_rms: F,
-    ) -> Result<Stream, MonitorError>
-    where
-        F: FnMut(f32) + Send + 'static,
-    {
-        let err_fn = |err| eprintln!("mic monitor error: {}", err);
-        device
-            .build_input_stream(
-                &config,
-                move |data: &[i16], _| {
-                    if !monitoring_flag.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    // Convertir i16 en f32 puis calculer RMS
-                    let sum_squares: f32 = data
-                        .iter()
-                        .map(|&x| {
-                            let normalized = x as f32 / i16::MAX as f32;
-                            normalized * normalized
-                        })
-                        .sum();
-                    let rms = (sum_squares / data.len() as f32).sqrt();
-                    on_rms(rms);
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| MonitorError::Audio(e.to_string()))
-    }
-
-    fn build_monitor_stream_u16<F>(
-        device: &cpal::Device,
-        config: cpal::StreamConfig,
-        monitoring_flag: Arc<AtomicBool>,
-        mut on_rms: F,
-    ) -> Result<Stream, MonitorError>
-    where
-        F: FnMut(f32) + Send + 'static,
-    {
-        let err_fn = |err| eprintln!("mic monitor error: {}", err);
-        device
-            .build_input_stream(
-                &config,
-                move |data: &[u16], _| {
-                    if !monitoring_flag.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    // Convertir u16 en f32 puis calculer RMS
-                    let sum_squares: f32 = data
-                        .iter()
-                        .map(|&x| {
-                            let centered = x as i32 - i16::MAX as i32;
-                            let normalized = centered as f32 / i16::MAX as f32;
-                            normalized * normalized
-                        })
-                        .sum();
-                    let rms = (sum_squares / data.len() as f32).sqrt();
-                    on_rms(rms);
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| MonitorError::Audio(e.to_string()))
+        match config.sample_format() {
+            SampleFormat::F32 => {
+                let cfg: cpal::StreamConfig = config.into();
+                device
+                    .build_input_stream(
+                        &cfg,
+                        move |data: &[f32], _| {
+                            if !monitoring_flag.load(Ordering::SeqCst) { return; }
+                            let rms = compute_rms_f32(data);
+                            on_rms(rms);
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| MonitorError::Audio(e.to_string()))
+            }
+            SampleFormat::I16 => {
+                let cfg: cpal::StreamConfig = config.into();
+                device
+                    .build_input_stream(
+                        &cfg,
+                        move |data: &[i16], _| {
+                            if !monitoring_flag.load(Ordering::SeqCst) { return; }
+                            let rms = compute_rms_i16(data);
+                            on_rms(rms);
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| MonitorError::Audio(e.to_string()))
+            }
+            SampleFormat::U16 => {
+                let cfg: cpal::StreamConfig = config.into();
+                device
+                    .build_input_stream(
+                        &cfg,
+                        move |data: &[u16], _| {
+                            if !monitoring_flag.load(Ordering::SeqCst) { return; }
+                            let rms = compute_rms_u16(data);
+                            on_rms(rms);
+                        },
+                        err_fn,
+                        None,
+                    )
+                    .map_err(|e| MonitorError::Audio(e.to_string()))
+            }
+            _ => Err(MonitorError::Audio("unsupported sample format".into())),
+        }
     }
 
     pub fn stop(&mut self) {
@@ -373,3 +230,36 @@ impl MicMonitor {
     }
 }
 
+// ── Fonctions utilitaires ────────────────────────────────────────────────────
+
+fn compute_rms_f32(data: &[f32]) -> f32 {
+    if data.is_empty() { return 0.0; }
+    let sum: f32 = data.iter().map(|&x| x * x).sum();
+    (sum / data.len() as f32).sqrt()
+}
+
+fn compute_rms_i16(data: &[i16]) -> f32 {
+    if data.is_empty() { return 0.0; }
+    let sum: f32 = data.iter().map(|&x| {
+        let n = x as f32 / i16::MAX as f32;
+        n * n
+    }).sum();
+    (sum / data.len() as f32).sqrt()
+}
+
+fn compute_rms_u16(data: &[u16]) -> f32 {
+    if data.is_empty() { return 0.0; }
+    let sum: f32 = data.iter().map(|&x| {
+        let n = (x as i32 - i16::MAX as i32) as f32 / i16::MAX as f32;
+        n * n
+    }).sum();
+    (sum / data.len() as f32).sqrt()
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}

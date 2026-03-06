@@ -59,8 +59,8 @@ pub async fn start_background_sync_loop(
             }));
 
             // Notification système pour informer l'utilisateur
-            let _ = tauri::api::notification::Notification::new("com.gilbert.app")
-                .title("Gilbert Desktop")
+            let _ = tauri::api::notification::Notification::new("com.gilbert.desktop")
+                .title("Gilbert")
                 .body(format!("{} enregistrement{} en attente d'upload",
                     pending_count,
                     if pending_count > 1 { "s" } else { "" }
