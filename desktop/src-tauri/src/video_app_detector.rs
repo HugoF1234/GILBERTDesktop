@@ -288,7 +288,7 @@ impl VideoAppDetector {
                 if let Some(ref app_name) = video_app {
                     // Notifier dès que l'app est ouverte (pas besoin d'un call actif)
                     let last_meeting = last_notif_meeting.load(std::sync::atomic::Ordering::SeqCst);
-                    let cooldown_ok = now.saturating_sub(last_meeting) >= 600; // 10 min
+                    let cooldown_ok = now.saturating_sub(last_meeting) >= 1800; // 30 min
 
                     if !prev_meeting_active && cooldown_ok {
                         println!("🎙️ App visio détectée: {}", app_name);
@@ -322,7 +322,7 @@ impl VideoAppDetector {
                     // Notifier seulement si c'est une nouvelle app (différente de la précédente)
                     let is_new_app = prev_mic_app.as_deref() != Some(mic_name.as_str());
                     let last_mic = last_notif_mic.load(std::sync::atomic::Ordering::SeqCst);
-                    let cooldown_ok = now.saturating_sub(last_mic) >= 600; // 10 min
+                    let cooldown_ok = now.saturating_sub(last_mic) >= 1800; // 30 min
 
                     if is_new_app && cooldown_ok {
                         println!("🎤 Micro actif: {}", mic_name);

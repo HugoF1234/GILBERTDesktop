@@ -77,11 +77,11 @@ impl MicMonitor {
         let app_id = self.app_identifier.clone();
 
         // Seuil RMS : détecte une vraie activité vocale (pas juste le bruit de fond)
-        const RMS_THRESHOLD: f32 = 0.005;
-        // Durée minimale d'activité avant de notifier (évite les faux positifs)
-        const ACTIVITY_DURATION_MS: u64 = 500;
-        // Cooldown entre deux notifications : 10 minutes
-        const COOLDOWN_SECS: u64 = 600;
+        const RMS_THRESHOLD: f32 = 0.008;
+        // Durée minimale d'activité avant de notifier — 3 secondes pour éviter les faux positifs
+        const ACTIVITY_DURATION_MS: u64 = 3000;
+        // Cooldown entre deux notifications : 30 minutes pour ne pas être agressif
+        const COOLDOWN_SECS: u64 = 1800;
 
         let activity_start: Arc<parking_lot::Mutex<Option<Instant>>> =
             Arc::new(parking_lot::Mutex::new(None));

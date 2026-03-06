@@ -178,7 +178,9 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
   // ===== NOUVEAUX ÉTATS POUR PHASE 1 + 2 =====
   const [connectionStatus] = useState<ConnectionStatus>('online');
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [recoveryAutoUpload, setRecoveryAutoUpload] = useState(false);
   const [, setHasPendingRecordings] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   // ===== ÉTAT POUR L'ANIMATION DE GILBERT =====
   const [gilbertState, setGilbertState] = useState<'salut' | 'idle' | 'recording'>('salut');
@@ -263,7 +265,9 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
         
         if (oldFailedRecordings.length > 0) {
           logger.debug(`⚠️ ${oldFailedRecordings.length} ancien(s) enregistrement(s) échoué(s) détecté(s)`);
-          setShowRecoveryDialog(true);
+          setPendingCount(oldFailedRecordings.length);
+          setHasPendingRecordings(true);
+          // Ne plus ouvrir automatiquement le dialog — on montre juste la bannière
         } else if (currentRecordingUuid) {
           logger.debug('✅ Enregistrement en cours détecté, pas d\'alerte Recovery');
         }
@@ -299,6 +303,10 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
         
         if (oldFailedRecordings.length > 0) {
           logger.debug(`📦 ${oldFailedRecordings.length} enregistrement(s) en attente détecté(s) après reconnexion`);
+          setPendingCount(oldFailedRecordings.length);
+          setHasPendingRecordings(true);
+          // Ouvrir avec auto-upload à la reconnexion
+          setRecoveryAutoUpload(true);
           setShowRecoveryDialog(true);
         }
       } catch (error) {
@@ -1425,7 +1433,62 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
         </Typography>
       </Box>
 
-      {/* Quick Actions */}
+      {/* Bannière enregistrements en attente */}
+      {pendingCount > 0 && (
+        <Box sx={{
+          mb: 3,
+          p: 2,
+          borderRadius: '12px',
+          background: 'linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%)',
+          border: '1px solid #FED7AA',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
+          opacity: isLoaded ? 1 : 0,
+          transform: isLoaded ? 'translateY(0)' : 'translateY(10px)',
+          transition: 'all 0.2s ease-out 0.03s',
+        }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <Box sx={{
+              width: 36,
+              height: 36,
+              borderRadius: '50%',
+              bgcolor: '#F97316',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}>
+              <CloudUploadIcon sx={{ color: 'white', fontSize: 18 }} />
+            </Box>
+            <Box>
+              <Typography variant="body2" fontWeight={600} color="#9A3412">
+                {pendingCount} enregistrement{pendingCount > 1 ? 's' : ''} en attente d'upload
+              </Typography>
+              <Typography variant="caption" color="#C2410C">
+                Sauvegardé{pendingCount > 1 ? 's' : ''} localement — cliquez pour soumettre
+              </Typography>
+            </Box>
+          </Box>
+          <Button
+            variant="contained"
+            size="small"
+            onClick={() => setShowRecoveryDialog(true)}
+            sx={{
+              textTransform: 'none',
+              bgcolor: '#F97316',
+              '&:hover': { bgcolor: '#EA580C' },
+              borderRadius: '8px',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            Récupérer
+          </Button>
+        </Box>
+      )}
       <Box sx={{ 
         mb: 6,
         opacity: isLoaded ? 1 : 0,
@@ -3091,15 +3154,19 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
       {/* Dialog de récupération des enregistrements non uploadés (PHASE 2) */}
       <RecordingRecoveryDialog
         open={showRecoveryDialog}
+        autoUploadOnOpen={recoveryAutoUpload}
         onClose={() => {
           setShowRecoveryDialog(false);
+          setRecoveryAutoUpload(false);
           // Ne PAS ouvrir le dialog de sauvegarde quand on ferme le recovery
           setLatestAudioFile(null);
           setTitleInput('');
         }}
         onRecoveriesCompleted={async () => {
           setShowRecoveryDialog(false);
+          setRecoveryAutoUpload(false);
           setHasPendingRecordings(false);
+          setPendingCount(0);
           setLatestAudioFile(null);
           setTitleInput('');
           // Rafraîchir la liste des réunions

@@ -2,6 +2,11 @@ import apiClient from './apiClient';
 import { useDataStore } from '../stores/dataStore';
 import { logger } from '@/utils/logger';
 
+// Détecter si on est dans l'app desktop Tauri
+function _isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI__' in window;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -299,9 +304,19 @@ async function _doVerifyToken(): Promise<boolean> {
 /**
  * Handle an invalid token: clear storage and redirect to /auth.
  * Called exclusively from the centralized verifyTokenValidity flow.
+ * Sur desktop Tauri, on ne déconnecte JAMAIS automatiquement — on laisse l'utilisateur
+ * décider (pour éviter de perdre l'accès en cas d'erreur temporaire de serveur).
  */
 function _handleInvalidToken(): void {
   _invalidateCache();
+
+  // Sur desktop Tauri : ne pas déconnecter automatiquement
+  // L'utilisateur peut toujours utiliser l'app et se reconnecter manuellement
+  if (_isTauri()) {
+    logger.warn('[Auth] Token invalide détecté sur desktop — déconnexion automatique désactivée.');
+    return;
+  }
+
   logoutUser();
   if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/auth')) {
     window.location.href = '/auth';

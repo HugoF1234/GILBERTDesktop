@@ -33,33 +33,44 @@ interface RecordingRecoveryDialogProps {
   open: boolean;
   onClose: () => void;
   onRecoveriesCompleted?: () => void;
+  autoUploadOnOpen?: boolean;
 }
 
 const RecordingRecoveryDialog: React.FC<RecordingRecoveryDialogProps> = ({
   open,
   onClose,
   onRecoveriesCompleted,
+  autoUploadOnOpen = false,
 }) => {
   const [pendingRecordings, setPendingRecordings] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploadingUuid, setUploadingUuid] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState<{ totalSizeMB: number; recordingsCount: number } | null>(null);
+  const autoUploadTriggeredRef = React.useRef(false);
 
   useEffect(() => {
     if (open) {
-      loadPendingRecordings();
+      autoUploadTriggeredRef.current = false;
+      loadPendingRecordings().then((recordings) => {
+        if (autoUploadOnOpen && recordings && recordings.length > 0 && navigator.onLine) {
+          autoUploadTriggeredRef.current = true;
+          handleUploadAll(recordings);
+        }
+      });
       loadStorageInfo();
     }
   }, [open]);
 
-  const loadPendingRecordings = async () => {
+  const loadPendingRecordings = async (): Promise<any[]> => {
     setLoading(true);
     try {
       const recordings = await recordingStorage.getPendingRecordings();
       setPendingRecordings(recordings);
       logger.debug(`📦 ${recordings.length} enregistrement(s) en attente de récupération`);
+      return recordings;
     } catch (error) {
       logger.error('Erreur chargement enregistrements:', error);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -74,9 +85,15 @@ const RecordingRecoveryDialog: React.FC<RecordingRecoveryDialogProps> = ({
     }
   };
 
+  const handleUploadAll = async (recordings: any[]) => {
+    for (const recording of recordings) {
+      if (!navigator.onLine) break;
+      await handleUploadRecording(recording);
+    }
+  };
+
   const handleUploadRecording = async (recording: any) => {
     setUploadingUuid(recording.uuid);
-    
     try {
       // Mettre à jour le statut en "uploading"
       await recordingStorage.updateUploadStatus(recording.uuid, 'uploading');

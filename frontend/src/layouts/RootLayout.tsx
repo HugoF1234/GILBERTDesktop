@@ -234,7 +234,11 @@ function RootLayout(): React.ReactElement {
       const isValid = await verifyTokenValidity();
       if (!isValid) {
         setIsLoading(false);
-        navigate('/auth', { replace: true });
+        // Sur desktop Tauri : ne jamais rediriger vers /auth automatiquement
+        // L'utilisateur garde son accès même si le token semble invalide (peut être une erreur temporaire)
+        if (!isTauriApp()) {
+          navigate('/auth', { replace: true });
+        }
         return;
       }
 
@@ -306,7 +310,9 @@ function RootLayout(): React.ReactElement {
           // Nettoyer l'URL même en cas d'erreur
           window.history.replaceState({}, document.title, window.location.pathname);
           setIsLoading(false);
-          navigate('/auth', { replace: true });
+          if (!isTauriApp()) {
+            navigate('/auth', { replace: true });
+          }
         }
       }
     };
