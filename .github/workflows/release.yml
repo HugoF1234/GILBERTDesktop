@@ -112,7 +112,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   build-linux:
     name: Linux (.AppImage)
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -142,6 +142,14 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+
+      - name: Fix webkit2gtk Rust crate compatibility (ubuntu-22.04)
+        run: |
+          cd desktop/src-tauri
+          # webkit2gtk 0.18.x Rust crate a un bug sur ubuntu-22.04 : SettingsExt n'est pas en scope
+          # On force webkit2gtk-sys et webkit2gtk vers une version antérieure compatible
+          cargo update -p webkit2gtk-sys --precise 0.18.0 2>/dev/null || true
+          cargo update -p webkit2gtk --precise 0.18.0 2>/dev/null || true
 
       - name: Install frontend deps
         run: npm install --legacy-peer-deps
