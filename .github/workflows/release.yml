@@ -86,8 +86,25 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
-          echo "✅ Notarisation terminée"
+            --wait 2>&1 | tee /tmp/notary_result.txt || true
+
+          # Récupérer l'ID de soumission et afficher le log détaillé
+          SUBMISSION_ID=$(grep "id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
+          if [ -n "$SUBMISSION_ID" ]; then
+            echo "📋 Log détaillé de notarisation :"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+          fi
+
+          # Vérifier si succès
+          if grep -q "status: Accepted" /tmp/notary_result.txt; then
+            echo "✅ Notarisation terminée"
+          else
+            echo "❌ Notarisation échouée — voir log ci-dessus"
+            exit 1
+          fi
 
           # Agréer (staple)
           xcrun stapler staple "$DMG"
