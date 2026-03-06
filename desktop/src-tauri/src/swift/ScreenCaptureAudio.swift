@@ -3,6 +3,7 @@ import AVFoundation
 import ScreenCaptureKit
 import AppKit  // For NSWorkspace
 import CoreAudio  // Pour lire le sample rate natif du device de sortie (fix AirPods)
+import CoreGraphics  // Pour CGPreflightScreenCaptureAccess / CGRequestScreenCaptureAccess
 
 // MARK: - C-compatible callback types
 public typealias AudioDataCallback = @convention(c) (UnsafePointer<Float>, Int32, Int32, Int32) -> Void
@@ -30,70 +31,47 @@ public func sck_is_available() -> Bool {
 @_cdecl("sck_has_permission")
 public func sck_has_permission() -> Bool {
     print("[SCK-SWIFT] sck_has_permission() called")
-    if #available(macOS 13.0, *) {
-        // Si on a déjà un résultat positif en cache, le retourner directement
-        // (évite d'appeler SCShareableContent à chaque vérification → pas de popup répétée)
-        if let cached = cachedPermissionResult, cached == true {
-            print("[SCK-SWIFT] Permission: cached ✅")
-            return true
-        }
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var hasPermission = false
-
-        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
-            if let error = error as NSError? {
-                print("[SCK-SWIFT] Error code: \(error.code), domain: \(error.domain)")
-                hasPermission = false
-            } else if let content = content {
-                hasPermission = !content.displays.isEmpty
-                print("[SCK-SWIFT] Found \(content.displays.count) displays — permission granted: \(hasPermission)")
-            }
-            semaphore.signal()
-        }
-
-        let result = semaphore.wait(timeout: .now() + 5.0)
-        if result == .timedOut {
-            print("[SCK-SWIFT] Permission check timed out")
-            return false
-        }
-
-        // Mettre en cache le résultat positif pour éviter les appels répétés
-        if hasPermission {
-            cachedPermissionResult = true
-        }
-        print("[SCK-SWIFT] Permission result: \(hasPermission)")
-        return hasPermission
+    // CGPreflightScreenCaptureAccess : vérification SILENCIEUSE qui lit TCC directement.
+    // Contrairement à SCShareableContent, ne déclenche JAMAIS de popup.
+    // Fonctionne depuis macOS 12.3+ et persiste entre les sessions.
+    let granted = CGPreflightScreenCaptureAccess()
+    if granted {
+        cachedPermissionResult = true
+        print("[SCK-SWIFT] Permission: granted via TCC ✅")
+    } else {
+        print("[SCK-SWIFT] Permission: not granted")
     }
-    return false
+    return granted
 }
 
 @_cdecl("sck_request_permission")
 public func sck_request_permission() -> Bool {
-    if #available(macOS 13.0, *) {
-        // Ne jamais redemander si déjà refusée pendant cette session
-        if permissionAlreadyRequested {
-            print("[SCK-SWIFT] Permission already requested this session — not asking again")
-            return cachedPermissionResult ?? false
-        }
+    print("[SCK-SWIFT] sck_request_permission() called")
+
+    // Vérifier d'abord silencieusement
+    if CGPreflightScreenCaptureAccess() {
+        cachedPermissionResult = true
         permissionAlreadyRequested = true
-
-        print("[SCK-SWIFT] Requesting Screen Recording permission (once per session)...")
-        let semaphore = DispatchSemaphore(value: 0)
-        var hasPermission = false
-
-        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
-            hasPermission = (error == nil && content != nil && !(content?.displays.isEmpty ?? true))
-            semaphore.signal()
-        }
-
-        _ = semaphore.wait(timeout: .now() + 30.0)
-        // Mettre en cache le résultat pour éviter les appels futurs
-        cachedPermissionResult = hasPermission
-        print("[SCK-SWIFT] Permission request result: \(hasPermission)")
-        return hasPermission
+        print("[SCK-SWIFT] Permission already granted ✅")
+        return true
     }
-    return false
+
+    // Ne pas redemander si déjà tenté cette session
+    if permissionAlreadyRequested {
+        print("[SCK-SWIFT] Already requested this session, skipping")
+        return false
+    }
+    permissionAlreadyRequested = true
+
+    // CGRequestScreenCaptureAccess : affiche la popup système UNE SEULE FOIS
+    // et écrit le résultat dans TCC de façon PERSISTANTE.
+    // Après acceptation, CGPreflightScreenCaptureAccess() retournera true pour toujours.
+    print("[SCK-SWIFT] Requesting Screen Recording permission via CGRequestScreenCaptureAccess...")
+    let granted = CGRequestScreenCaptureAccess()
+    cachedPermissionResult = granted
+    print("[SCK-SWIFT] Permission request result: \(granted)")
+    return granted
 }
 
 @_cdecl("sck_set_callbacks")
