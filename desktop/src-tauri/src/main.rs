@@ -29,8 +29,6 @@ fn request_screen_recording_permission() -> bool {
         fn sck_is_available() -> bool;
         fn sck_has_permission() -> bool;
         fn sck_request_permission() -> bool;
-        fn request_microphone_permission();
-        fn has_microphone_permission() -> bool;
     }
 
     println!("[PERMISSIONS] Checking Screen Recording permission...");

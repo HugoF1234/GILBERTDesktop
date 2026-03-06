@@ -167,6 +167,7 @@ impl VideoAppDetector {
     /// Vérifie si l'utilisateur est dans un call actif (via connexions UDP voix)
     /// Les apps de visio utilisent UDP pour la voix/vidéo en temps réel
     /// Note: UDP:443 = QUIC (normal), UDP:autres ports = call voix actif
+    #[allow(dead_code)]
     fn is_in_active_call() -> bool {
         // Méthode principale : Vérifier les connexions UDP voix (pas QUIC)
         // Discord/Teams/Zoom utilisent UDP sur des ports autres que 443 pour la voix
