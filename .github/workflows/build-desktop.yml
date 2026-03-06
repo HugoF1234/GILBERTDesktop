@@ -1,0 +1,88 @@
+name: Build Desktop App
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+            artifact_path: 'desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg'
+            artifact_name: 'GilbertDesktop-macos-arm64'
+          - platform: 'windows-latest'
+            args: ''
+            artifact_path: 'desktop/src-tauri/target/release/bundle/msi/*.msi'
+            artifact_name: 'GilbertDesktop-windows'
+          - platform: 'ubuntu-22.04'
+            args: ''
+            artifact_path: 'desktop/src-tauri/target/release/bundle/appimage/*.AppImage'
+            artifact_name: 'GilbertDesktop-linux'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libasound2-dev
+
+      - name: Install dependencies (frontend)
+        run: |
+          cd frontend
+          npm install
+
+      - name: Install dependencies (desktop)
+        run: |
+          cd desktop
+          npm install
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+        env:
+          VITE_API_BASE_URL: https://gilbert-assistant.ovh
+
+      - name: Build Tauri
+        run: |
+          cd desktop
+          npx tauri build ${{ matrix.args }}
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          retention-days: 30
+
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact_path }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

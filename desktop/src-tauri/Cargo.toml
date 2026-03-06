@@ -6,6 +6,11 @@ authors = ["Gilbert"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.70"
+default-run = "Gilbert"
+
+[[bin]]
+name = "Gilbert"
+path = "src/main.rs"
 
 [lib]
 name = "gilbert_desktop_lib"
