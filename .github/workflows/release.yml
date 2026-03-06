@@ -73,13 +73,32 @@ jobs:
           APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
           DMG="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Gilbert_0.2.0_aarch64.dmg"
           IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
+          ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
-          # Re-signer avec le vrai Developer ID (remplace la signature ad-hoc du build)
-          codesign --force --deep --sign "$IDENTITY" \
+          # Signer tous les composants internes (libs, frameworks) d'abord
+          find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) | while read f; do
+            codesign --force --sign "$IDENTITY" --timestamp --options runtime "$f" || true
+          done
+
+          # Signer le binaire principal
+          codesign --force --sign "$IDENTITY" \
+            --timestamp \
             --options runtime \
-            --entitlements desktop/src-tauri/entitlements.mac.plist \
+            --entitlements "$ENTITLEMENTS" \
+            "$APP/Contents/MacOS/Gilbert"
+          echo "✅ Binaire signé"
+
+          # Signer le bundle entier
+          codesign --force --sign "$IDENTITY" \
+            --timestamp \
+            --options runtime \
+            --entitlements "$ENTITLEMENTS" \
             "$APP"
-          echo "✅ App signée avec Developer ID"
+          echo "✅ Bundle signé"
+
+          # Vérifier la signature
+          codesign --verify --deep --strict "$APP" && echo "✅ Vérification OK"
+          codesign -dv "$APP/Contents/MacOS/Gilbert" 2>&1 | grep -E "Authority|TeamID|Timestamp"
 
           # Notariser via notarytool
           xcrun notarytool submit "$DMG" \
@@ -88,23 +107,21 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait 2>&1 | tee /tmp/notary_result.txt || true
 
-          # Récupérer l'ID de soumission et afficher le log détaillé
-          SUBMISSION_ID=$(grep "id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
-          if [ -n "$SUBMISSION_ID" ]; then
-            echo "📋 Log détaillé de notarisation :"
-            xcrun notarytool log "$SUBMISSION_ID" \
+          # Récupérer l'ID de soumission et afficher le log détaillé si échec
+          SUBMISSION_ID=$(grep "  id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
+          if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
+            echo "❌ Notarisation échouée — log détaillé :"
+            [ -n "$SUBMISSION_ID" ] && xcrun notarytool log "$SUBMISSION_ID" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_PASSWORD" \
               --team-id "$APPLE_TEAM_ID" || true
-          fi
-
-          # Vérifier si succès
-          if grep -q "status: Accepted" /tmp/notary_result.txt; then
-            echo "✅ Notarisation terminée"
-          else
-            echo "❌ Notarisation échouée — voir log ci-dessus"
             exit 1
           fi
+          echo "✅ Notarisation acceptée"
+
+          # Staple
+          xcrun stapler staple "$DMG"
+          echo "✅ Staple effectué"
 
           # Agréer (staple)
           xcrun stapler staple "$DMG"
