@@ -63,7 +63,6 @@ jobs:
         working-directory: desktop
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
 
       - name: Sign & Notarize .app
         env:
@@ -75,12 +74,12 @@ jobs:
           DMG="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Gilbert_0.2.0_aarch64.dmg"
           IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
 
-          # Signer l'app
+          # Re-signer avec le vrai Developer ID (remplace la signature ad-hoc du build)
           codesign --force --deep --sign "$IDENTITY" \
             --options runtime \
             --entitlements desktop/src-tauri/entitlements.mac.plist \
             "$APP"
-          echo "✅ App signée"
+          echo "✅ App signée avec Developer ID"
 
           # Notariser via notarytool
           xcrun notarytool submit "$DMG" \
