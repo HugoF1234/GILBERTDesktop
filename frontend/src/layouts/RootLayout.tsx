@@ -17,6 +17,7 @@ import type { ViewType } from '../types/router';
 import type { RouteContextType } from '../hooks/useRouteContext';
 import { recordingManager } from '../services/recordingManager';
 import { isTauriApp } from '../services/tauriRecordingService';
+import { recordingStorage } from '../services/recordingStorage';
 
 // Import des bannières
 import GenerationBanner from '../components/GenerationBanner';
@@ -53,6 +54,9 @@ function RootLayout(): React.ReactElement {
 
   // État de la sidebar
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+
+  // Nombre d'enregistrements en attente de récupération
+  const [pendingRecordingsCount, setPendingRecordingsCount] = useState<number>(0);
 
 
   // Onboarding Questionnaire & Tour : par utilisateur (backend pour questionnaire, localStorage par user pour le tour)
@@ -382,6 +386,37 @@ function RootLayout(): React.ReactElement {
     setSidebarOpen(prev => !prev);
   }, []);
 
+  // Surveiller les enregistrements en attente pour le badge sidebar
+  useEffect(() => {
+    const checkPending = async () => {
+      try {
+        await recordingStorage.init();
+        const pending = await recordingStorage.getPendingRecordings();
+        const currentUuid = recordingManager.getCurrentRecordingUuid();
+        const count = pending.filter((r: { uuid: string }) => r.uuid !== currentUuid).length;
+        setPendingRecordingsCount(count);
+      } catch {
+        // silencieux
+      }
+    };
+
+    checkPending();
+
+    // Re-vérifier au focus de la fenêtre (retour sur l'app)
+    const handleFocus = () => checkPending();
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('online', handleFocus);
+
+    // Polling léger toutes les 30s
+    const interval = setInterval(checkPending, 30_000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('online', handleFocus);
+      clearInterval(interval);
+    };
+  }, []);
+
   // Fermer le warning d'upload
   const handleCloseUploadWarning = useCallback((): void => {
     setShowUploadWarning(false);
@@ -441,6 +476,7 @@ function RootLayout(): React.ReactElement {
           onToggle={handleToggleSidebar}
           isRecording={isRecording}
           isSmallScreen={isSmallScreen}
+          pendingRecordingsCount={pendingRecordingsCount}
         />
 
         <Box

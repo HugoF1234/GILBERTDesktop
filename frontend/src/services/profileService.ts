@@ -52,15 +52,9 @@ export function formatImageUrl(url: string | null | undefined): string | null {
     logger.debug(`URL relative transformée: ${url} -> ${fullUrl}`);
   }
   
-  // Ajouter un cache-buster (timestamp) pour forcer le rafraîchissement de l'image
-  // Cela évite les problèmes de cache du navigateur lorsque l'image est mise à jour
-  const separator = fullUrl.includes('?') ? '&' : '?';
-  const cacheBuster = `v=${Date.now()}`;
-  const finalUrl = `${fullUrl}${separator}${cacheBuster}`;
-  
-  logger.debug(`Image URL finale avec cache-buster: ${finalUrl}`);
-  
-  return finalUrl;
+  logger.debug(`Image URL finale: ${fullUrl}`);
+
+  return fullUrl;
 }
 
 /**

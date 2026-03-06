@@ -282,28 +282,25 @@ impl VideoAppDetector {
                     continue;
                 }
 
-                // ── Cas 1 : app de visio EN CALL actif ───────────────────────
+                // ── Cas 1 : app de visio détectée (ouverte, call ou pas) ─────
                 let video_app = Self::get_running_video_app();
-                let in_call = if video_app.is_some() { Self::is_in_active_call() } else { false };
 
                 if let Some(ref app_name) = video_app {
-                    if in_call {
-                        // Notifier seulement si : (1) pas notifié avant, (2) cooldown 10 min respecté
-                        let last_meeting = last_notif_meeting.load(std::sync::atomic::Ordering::SeqCst);
-                        let cooldown_ok = now.saturating_sub(last_meeting) >= 600; // 10 min
+                    // Notifier dès que l'app est ouverte (pas besoin d'un call actif)
+                    let last_meeting = last_notif_meeting.load(std::sync::atomic::Ordering::SeqCst);
+                    let cooldown_ok = now.saturating_sub(last_meeting) >= 600; // 10 min
 
-                        if !prev_meeting_active && cooldown_ok {
-                            println!("🎙️ Meeting détecté: {}", app_name);
-                            let _ = Notification::new(&app_id)
-                                .title("Gilbert — Réunion détectée")
-                                .body(&format!("{} — Voulez-vous enregistrer cette réunion ?", app_name))
-                                .show();
-                            last_notif_meeting.store(now, std::sync::atomic::Ordering::SeqCst);
-                        }
-                        prev_meeting_active = true;
-                        prev_mic_app = None;
-                        continue;
+                    if !prev_meeting_active && cooldown_ok {
+                        println!("🎙️ App visio détectée: {}", app_name);
+                        let _ = Notification::new(&app_id)
+                            .title("Gilbert — Réunion détectée")
+                            .body(&format!("{} est ouvert — Voulez-vous enregistrer ?", app_name))
+                            .show();
+                        last_notif_meeting.store(now, std::sync::atomic::Ordering::SeqCst);
                     }
+                    prev_meeting_active = true;
+                    prev_mic_app = None;
+                    continue;
                 }
 
                 // Pas de call actif → reset état réunion

@@ -1236,6 +1236,8 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                         src={avatarUrl}
                         alt=""
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                         onError={() => setFailedAvatars(prev => new Set(prev).add(selectedConversation.contact.contact_user_id))}
                       />
                     );
@@ -1622,6 +1624,8 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                           src={avatar}
                           alt=""
                           className="w-full h-full object-cover"
+                          loading="lazy"
+                          decoding="async"
                           onError={() => setFailedAvatars(prev => new Set(prev).add(contact.contact_user_id))}
                         />
                       ) : (
@@ -1799,7 +1803,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                           >
                             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full overflow-hidden flex-shrink-0 bg-slate-200 flex items-center justify-center">
                               {avatarUrl ? (
-                                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                                <img src={avatarUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
                               ) : (
                                 <span className="text-slate-600 font-semibold text-sm">
                                   {getInitials(name)}

@@ -54,6 +54,7 @@ interface SidebarProps {
   open?: boolean;
   onToggle?: () => void;
   isRecording?: boolean;
+  pendingRecordingsCount?: number;
 }
 
 // ============================================================================
@@ -105,6 +106,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   open = true,
   onToggle,
   isRecording = false,
+  pendingRecordingsCount = 0,
 }) => {
   // React Router hooks
   const navigate = useNavigate();
@@ -451,6 +453,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   }> = ({ item, isActive }) => {
     const { Icon } = item;
     const isRecordingItem = item.id === 'dashboard' && isRecording;
+    const hasPendingRecovery = item.id === 'dashboard' && pendingRecordingsCount > 0 && !isRecording;
 
     // Map item id to tour target
     const getTourTarget = () => {
@@ -491,6 +494,15 @@ const Sidebar: React.FC<SidebarProps> = ({
               className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 animate-pulse"
               style={{ boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)' }}
             />
+          )}
+          {/* Pending recovery badge */}
+          {hasPendingRecovery && (
+            <span
+              className="absolute -top-1 -right-1 min-w-[16px] h-4 px-0.5 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center"
+              style={{ boxShadow: '0 0 6px rgba(249, 115, 22, 0.5)' }}
+            >
+              {pendingRecordingsCount}
+            </span>
           )}
         </div>
 
