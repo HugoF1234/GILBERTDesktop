@@ -274,12 +274,23 @@ jobs:
         with:
           path: artifacts
 
+      - name: Set release tag
+        id: tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Gilbert ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Gilbert ${{ steps.tag.outputs.tag }}
+          prerelease: ${{ steps.tag.outputs.tag == 'latest' }}
           body: |
-            ## Gilbert Desktop ${{ github.ref_name }}
+            ## Gilbert Desktop ${{ steps.tag.outputs.tag }}
 
             | Plateforme | Télécharger | Son système |
             |---|---|---|
@@ -288,11 +299,12 @@ jobs:
             | Linux | `.AppImage` | Micro uniquement |
 
             ### macOS
-            1. Télécharger le `.dmg` → glisser Gilbert dans Applications
-            2. Premier lancement : **clic droit → Ouvrir**
+            1. Télécharger le `.dmg`
+            2. Double-cliquer → glisser Gilbert dans Applications
+            3. Ouvrir normalement (app signée et notarisée ✅)
 
             ### Windows
-            Double-cliquer sur le `.msi`
+            Double-cliquer sur le `.msi` → si SmartScreen s'affiche : "Informations complémentaires" → "Exécuter quand même"
 
             ### Linux
             ```bash
