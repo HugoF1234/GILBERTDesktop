@@ -75,12 +75,12 @@ jobs:
           IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
           ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
-          # Signer tous les composants internes (libs, frameworks) d'abord
-          find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.framework" \) | while read f; do
+          # ÉTAPE 1 : Signer tous les composants internes d'abord
+          find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) | while read f; do
             codesign --force --sign "$IDENTITY" --timestamp --options runtime "$f" || true
           done
 
-          # Signer le binaire principal
+          # ÉTAPE 2 : Signer le binaire principal
           codesign --force --sign "$IDENTITY" \
             --timestamp \
             --options runtime \
@@ -88,7 +88,7 @@ jobs:
             "$APP/Contents/MacOS/Gilbert"
           echo "✅ Binaire signé"
 
-          # Signer le bundle entier
+          # ÉTAPE 3 : Signer le bundle entier
           codesign --force --sign "$IDENTITY" \
             --timestamp \
             --options runtime \
@@ -96,11 +96,39 @@ jobs:
             "$APP"
           echo "✅ Bundle signé"
 
-          # Vérifier la signature
-          codesign --verify --deep --strict "$APP" && echo "✅ Vérification OK"
-          codesign -dv "$APP/Contents/MacOS/Gilbert" 2>&1 | grep -E "Authority|TeamID|Timestamp"
+          # ÉTAPE 4 : Vérifier la signature
+          codesign --verify --deep --strict "$APP" && echo "✅ Vérification signature OK"
+          codesign -dv "$APP" 2>&1 | grep -E "Authority|TeamID|Timestamp"
 
-          # Recréer le DMG avec l'app correctement signée + lien Applications
+          # ÉTAPE 5 : Notariser l'APP (pas le DMG) via un zip temporaire
+          ditto -c -k --keepParent "$APP" /tmp/Gilbert.zip
+          xcrun notarytool submit /tmp/Gilbert.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait 2>&1 | tee /tmp/notary_result.txt || true
+
+          if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
+            SUBMISSION_ID=$(grep "  id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
+            echo "❌ Notarisation échouée — log détaillé :"
+            [ -n "$SUBMISSION_ID" ] && xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
+          echo "✅ Notarisation app acceptée"
+          rm /tmp/Gilbert.zip
+
+          # ÉTAPE 6 : Stapler l'APP directement
+          xcrun stapler staple "$APP"
+          echo "✅ App staplée"
+
+          # ÉTAPE 7 : Vérifier que l'app est bien notarisée
+          xcrun stapler validate "$APP" && echo "✅ Staple validé"
+          spctl -a -vvv "$APP" 2>&1 | grep -E "accepted|rejected|source"
+
+          # ÉTAPE 8 : Créer le DMG avec l'app déjà notarisée + staplée
           rm -f "$DMG"
           mkdir -p /tmp/dmg-content
           cp -R "$APP" /tmp/dmg-content/
@@ -110,30 +138,11 @@ jobs:
             -ov -format UDZO \
             "$DMG"
           rm -rf /tmp/dmg-content
-          echo "✅ DMG recréé avec l'app signée + lien Applications"
+          echo "✅ DMG créé avec app notarisée + staplée"
 
-          # Notariser via notarytool
-          xcrun notarytool submit "$DMG" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait 2>&1 | tee /tmp/notary_result.txt || true
-
-          # Afficher le log détaillé si échec
-          SUBMISSION_ID=$(grep "  id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
-          if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
-            echo "❌ Notarisation échouée — log détaillé :"
-            [ -n "$SUBMISSION_ID" ] && xcrun notarytool log "$SUBMISSION_ID" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
-            exit 1
-          fi
-          echo "✅ Notarisation acceptée"
-
-          # Staple
+          # ÉTAPE 9 : Stapler aussi le DMG (bonus)
           xcrun stapler staple "$DMG"
-          echo "✅ Staple effectué"
+          echo "✅ DMG staplé"
 
           # Agréer (staple)
           xcrun stapler staple "$DMG"
