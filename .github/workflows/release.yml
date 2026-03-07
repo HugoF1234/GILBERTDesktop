@@ -204,11 +204,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux system deps
+      - name: Install Linux system deps with webkit2gtk from focal
         run: |
+          # Ajouter les dépôts Ubuntu 20.04 (focal) pour webkit2gtk compatible avec wry-0.24
+          echo "deb http://archive.ubuntu.com/ubuntu focal main universe" | sudo tee /etc/apt/sources.list.d/focal.list
           sudo apt-get update
-          sudo apt-get install -y \
+          # Installer webkit2gtk depuis focal (version compatible avec wry-0.24)
+          sudo apt-get install -y -t focal \
             libwebkit2gtk-4.0-dev \
+            libjavascriptcoregtk-4.0-dev
+          # Installer le reste depuis jammy (22.04)
+          sudo apt-get install -y \
             libssl-dev \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
@@ -217,6 +223,8 @@ jobs:
             libasound2-dev \
             libsoup2.4-dev \
             pkg-config
+          # Retirer le dépôt focal pour ne pas polluer le système
+          sudo rm /etc/apt/sources.list.d/focal.list
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
@@ -225,19 +233,6 @@ jobs:
 
       - name: Setup Rust stable
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: desktop/src-tauri -> target
-
-      - name: Fix webkit2gtk Rust crate compatibility (ubuntu-22.04)
-        run: |
-          cd desktop/src-tauri
-          # webkit2gtk 0.18.x Rust crate a un bug sur ubuntu-22.04 : SettingsExt n'est pas en scope
-          # On force webkit2gtk-sys et webkit2gtk vers une version antérieure compatible
-          cargo update -p webkit2gtk-sys --precise 0.18.0 2>/dev/null || true
-          cargo update -p webkit2gtk --precise 0.18.0 2>/dev/null || true
 
       - name: Install frontend deps
         run: npm install --legacy-peer-deps
