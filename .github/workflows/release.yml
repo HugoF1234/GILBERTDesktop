@@ -100,6 +100,15 @@ jobs:
           codesign --verify --deep --strict "$APP" && echo "✅ Vérification OK"
           codesign -dv "$APP/Contents/MacOS/Gilbert" 2>&1 | grep -E "Authority|TeamID|Timestamp"
 
+          # Recréer le DMG avec l'app correctement signée
+          rm -f "$DMG"
+          mkdir -p "$(dirname "$DMG")"
+          hdiutil create -volname "Gilbert" \
+            -srcfolder "$APP" \
+            -ov -format UDZO \
+            "$DMG"
+          echo "✅ DMG recréé avec l'app signée"
+
           # Notariser via notarytool
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
@@ -107,7 +116,7 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait 2>&1 | tee /tmp/notary_result.txt || true
 
-          # Récupérer l'ID de soumission et afficher le log détaillé si échec
+          # Afficher le log détaillé si échec
           SUBMISSION_ID=$(grep "  id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
           if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
             echo "❌ Notarisation échouée — log détaillé :"
