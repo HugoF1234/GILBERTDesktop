@@ -140,8 +140,20 @@ jobs:
           rm -rf /tmp/dmg-content
           echo "✅ DMG créé avec app notarisée + staplée"
 
-          # ÉTAPE 9 : Stapler aussi le DMG (best effort, pas bloquant)
-          xcrun stapler staple "$DMG" || echo "ℹ️ Staple DMG non disponible (normal si DMG non soumis séparément)"
+          # ÉTAPE 9 : Notariser le DMG lui-même (nécessaire pour Gatekeeper sur téléchargements navigateur)
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait 2>&1 | tee /tmp/notary_dmg_result.txt || true
+
+          if grep -q "status: Accepted" /tmp/notary_dmg_result.txt; then
+            xcrun stapler staple "$DMG"
+            echo "✅ DMG notarisé et staplé"
+          else
+            echo "ℹ️ Notarisation DMG échouée — log :"
+            cat /tmp/notary_dmg_result.txt
+          fi
           echo "✅ Pipeline terminé"
 
       - name: Fix Info.plist CFBundleExecutable
