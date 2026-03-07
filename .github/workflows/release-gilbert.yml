@@ -64,6 +64,16 @@ jobs:
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
 
+      - name: Fix Info.plist CFBundleExecutable
+        run: |
+          PLIST="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app/Contents/Info.plist"
+          if [ -f "$PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Gilbert" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleName Gilbert" "$PLIST" || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Gilbert" "$PLIST" || true
+          fi
+          echo "✅ Info.plist corrigé avant signature"
+
       - name: Sign & Notarize .app
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -166,7 +176,7 @@ jobs:
           echo "✅ DMG esthétique créé"
 
           # ÉTAPE 9 : Signer le DMG avec Developer ID (obligatoire pour Gatekeeper)
-          codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG"
           echo "✅ DMG signé"
           codesign -dv "$DMG" 2>&1 | grep -E "Authority|Timestamp"
 
@@ -187,15 +197,6 @@ jobs:
             cat /tmp/notary_dmg_result.txt
           fi
           echo "✅ Pipeline terminé"
-
-      - name: Fix Info.plist CFBundleExecutable
-        run: |
-          PLIST="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app/Contents/Info.plist"
-          if [ -f "$PLIST" ]; then
-            /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable Gilbert" "$PLIST" || true
-            /usr/libexec/PlistBuddy -c "Set :CFBundleName Gilbert" "$PLIST" || true
-            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Gilbert" "$PLIST" || true
-          fi
 
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
