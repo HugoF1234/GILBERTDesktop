@@ -128,40 +128,62 @@ jobs:
           xcrun stapler validate "$APP" && echo "✅ Staple validé"
           spctl -a -vvv "$APP" 2>&1 | grep -E "accepted|rejected|source"
 
-          # ÉTAPE 8 : Créer le DMG soigné avec create-dmg (fond + positionnement)
+          # ÉTAPE 8 : Créer le DMG esthétique avec hdiutil + AppleScript
           rm -f "$DMG"
-          npm install -g create-dmg 2>/dev/null || true
+          DMG_TMP="/tmp/Gilbert_tmp.dmg"
+          BACKGROUND="desktop/src-tauri/icons/dmg-background.png"
 
-          # Essai avec create-dmg (DMG esthétique)
-          if command -v create-dmg &>/dev/null; then
-            create-dmg \
-              --volname "Gilbert" \
-              --background "desktop/src-tauri/icons/dmg-background.png" \
-              --window-pos 200 120 \
-              --window-size 660 400 \
-              --icon-size 128 \
-              --icon "Gilbert.app" 165 200 \
-              --hide-extension "Gilbert.app" \
-              --app-drop-link 495 200 \
-              "$DMG" \
-              "$APP" 2>&1 || FALLBACK=1
-          else
-            FALLBACK=1
-          fi
+          # Créer un DMG temporaire en lecture-écriture pour le personnaliser
+          mkdir -p /tmp/dmg-content
+          cp -R "$APP" /tmp/dmg-content/
+          ln -s /Applications /tmp/dmg-content/Applications
+          hdiutil create -volname "Gilbert" \
+            -srcfolder /tmp/dmg-content \
+            -ov -format UDRW \
+            -size 200m \
+            "$DMG_TMP"
+          rm -rf /tmp/dmg-content
 
-          # Fallback si create-dmg échoue
-          if [ "${FALLBACK}" = "1" ]; then
-            echo "⚠️ Fallback hdiutil"
-            mkdir -p /tmp/dmg-content
-            cp -R "$APP" /tmp/dmg-content/
-            ln -s /Applications /tmp/dmg-content/Applications
-            hdiutil create -volname "Gilbert" \
-              -srcfolder /tmp/dmg-content \
-              -ov -format UDZO \
-              "$DMG"
-            rm -rf /tmp/dmg-content
-          fi
-          echo "✅ DMG créé avec app notarisée + staplée"
+          # Monter le DMG temporaire
+          MOUNT_DIR=$(hdiutil attach "$DMG_TMP" -readwrite -noverify -noautoopen | grep /Volumes | awk '{print $NF}')
+          echo "Monté sur: $MOUNT_DIR"
+          sleep 2
+
+          # Copier le fond dans le DMG
+          mkdir -p "$MOUNT_DIR/.background"
+          cp "$BACKGROUND" "$MOUNT_DIR/.background/background.png"
+
+          # Appliquer le fond et positionner les icônes via AppleScript
+          osascript <<APPLESCRIPT
+            tell application "Finder"
+              tell disk "Gilbert"
+                open
+                set current view of container window to icon view
+                set toolbar visible of container window to false
+                set statusbar visible of container window to false
+                set the bounds of container window to {200, 120, 860, 520}
+                set viewOptions to the icon view options of container window
+                set arrangement of viewOptions to not arranged
+                set icon size of viewOptions to 128
+                set background picture of viewOptions to file ".background:background.png"
+                set position of item "Gilbert.app" of container window to {165, 185}
+                set position of item "Applications" of container window to {495, 185}
+                close
+                open
+                update without registering applications
+                delay 2
+              end tell
+            end tell
+APPLESCRIPT
+
+          # Démonter le DMG
+          sync
+          hdiutil detach "$MOUNT_DIR" -force
+
+          # Convertir en DMG compressé final
+          hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+          rm -f "$DMG_TMP"
+          echo "✅ DMG esthétique créé"
 
           # ÉTAPE 9 : Notariser le DMG lui-même (nécessaire pour Gatekeeper sur téléchargements navigateur)
           xcrun notarytool submit "$DMG" \
