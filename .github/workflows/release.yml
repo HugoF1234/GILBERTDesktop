@@ -100,14 +100,17 @@ jobs:
           codesign --verify --deep --strict "$APP" && echo "✅ Vérification OK"
           codesign -dv "$APP/Contents/MacOS/Gilbert" 2>&1 | grep -E "Authority|TeamID|Timestamp"
 
-          # Recréer le DMG avec l'app correctement signée
+          # Recréer le DMG avec l'app correctement signée + lien Applications
           rm -f "$DMG"
-          mkdir -p "$(dirname "$DMG")"
+          mkdir -p /tmp/dmg-content
+          cp -R "$APP" /tmp/dmg-content/
+          ln -s /Applications /tmp/dmg-content/Applications
           hdiutil create -volname "Gilbert" \
-            -srcfolder "$APP" \
+            -srcfolder /tmp/dmg-content \
             -ov -format UDZO \
             "$DMG"
-          echo "✅ DMG recréé avec l'app signée"
+          rm -rf /tmp/dmg-content
+          echo "✅ DMG recréé avec l'app signée + lien Applications"
 
           # Notariser via notarytool
           xcrun notarytool submit "$DMG" \
