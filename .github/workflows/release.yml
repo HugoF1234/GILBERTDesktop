@@ -128,16 +128,39 @@ jobs:
           xcrun stapler validate "$APP" && echo "✅ Staple validé"
           spctl -a -vvv "$APP" 2>&1 | grep -E "accepted|rejected|source"
 
-          # ÉTAPE 8 : Créer le DMG avec l'app déjà notarisée + staplée
+          # ÉTAPE 8 : Créer le DMG soigné avec create-dmg (fond + positionnement)
           rm -f "$DMG"
-          mkdir -p /tmp/dmg-content
-          cp -R "$APP" /tmp/dmg-content/
-          ln -s /Applications /tmp/dmg-content/Applications
-          hdiutil create -volname "Gilbert" \
-            -srcfolder /tmp/dmg-content \
-            -ov -format UDZO \
-            "$DMG"
-          rm -rf /tmp/dmg-content
+          npm install -g create-dmg 2>/dev/null || true
+
+          # Essai avec create-dmg (DMG esthétique)
+          if command -v create-dmg &>/dev/null; then
+            create-dmg \
+              --volname "Gilbert" \
+              --background "desktop/src-tauri/icons/dmg-background.png" \
+              --window-pos 200 120 \
+              --window-size 660 400 \
+              --icon-size 128 \
+              --icon "Gilbert.app" 165 200 \
+              --hide-extension "Gilbert.app" \
+              --app-drop-link 495 200 \
+              "$DMG" \
+              "$APP" 2>&1 || FALLBACK=1
+          else
+            FALLBACK=1
+          fi
+
+          # Fallback si create-dmg échoue
+          if [ "${FALLBACK}" = "1" ]; then
+            echo "⚠️ Fallback hdiutil"
+            mkdir -p /tmp/dmg-content
+            cp -R "$APP" /tmp/dmg-content/
+            ln -s /Applications /tmp/dmg-content/Applications
+            hdiutil create -volname "Gilbert" \
+              -srcfolder /tmp/dmg-content \
+              -ov -format UDZO \
+              "$DMG"
+            rm -rf /tmp/dmg-content
+          fi
           echo "✅ DMG créé avec app notarisée + staplée"
 
           # ÉTAPE 9 : Notariser le DMG lui-même (nécessaire pour Gatekeeper sur téléchargements navigateur)
