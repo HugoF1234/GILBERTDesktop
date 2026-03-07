@@ -165,7 +165,12 @@ jobs:
           rm -f "$DMG_TMP"
           echo "✅ DMG esthétique créé"
 
-          # ÉTAPE 9 : Notariser le DMG lui-même (nécessaire pour Gatekeeper sur téléchargements navigateur)
+          # ÉTAPE 9 : Signer le DMG avec Developer ID (obligatoire pour Gatekeeper)
+          codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+          echo "✅ DMG signé"
+          codesign -dv "$DMG" 2>&1 | grep -E "Authority|Timestamp"
+
+          # ÉTAPE 10 : Notariser le DMG signé
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
@@ -175,6 +180,8 @@ jobs:
           if grep -q "status: Accepted" /tmp/notary_dmg_result.txt; then
             xcrun stapler staple "$DMG"
             echo "✅ DMG notarisé et staplé"
+            # Vérification finale Gatekeeper
+            spctl -a -vvv -t open "$DMG" 2>&1 | grep -E "accepted|rejected|source" || true
           else
             echo "ℹ️ Notarisation DMG échouée — log :"
             cat /tmp/notary_dmg_result.txt
