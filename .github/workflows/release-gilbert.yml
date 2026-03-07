@@ -85,10 +85,25 @@ jobs:
           IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
           ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
-          # ÉTAPE 1 : Signer tous les composants internes d'abord
+          # ÉTAPE 1 : Signer tous les composants internes (de l'intérieur vers l'extérieur)
+          # Apple recommande de signer dans l'ordre du plus profond au plus superficiel
+
+          # 1a : dylib et .so
           find "$APP/Contents" -type f \( -name "*.dylib" -o -name "*.so" \) | while read f; do
             codesign --force --sign "$IDENTITY" --timestamp --options runtime "$f" || true
           done
+
+          # 1b : .framework complets (s'ils existent)
+          find "$APP/Contents" -name "*.framework" -type d | while read fw; do
+            codesign --force --sign "$IDENTITY" --timestamp --options runtime "$fw" || true
+          done
+
+          # 1c : helpers/exécutables dans Frameworks (hors binaire principal)
+          if [ -d "$APP/Contents/Frameworks" ]; then
+            find "$APP/Contents/Frameworks" -type f -perm +111 | while read f; do
+              codesign --force --sign "$IDENTITY" --timestamp --options runtime "$f" || true
+            done
+          fi
 
           # ÉTAPE 2 : Signer le binaire principal
           codesign --force --sign "$IDENTITY" \
@@ -99,6 +114,8 @@ jobs:
           echo "✅ Binaire signé"
 
           # ÉTAPE 3 : Signer le bundle entier
+          # --deep est volontairement omis : Apple le déconseille sur les bundles complexes
+          # (risque de mal gérer les .framework imbriqués) — on a déjà signé manuellement ci-dessus
           codesign --force --sign "$IDENTITY" \
             --timestamp \
             --options runtime \
@@ -106,9 +123,10 @@ jobs:
             "$APP"
           echo "✅ Bundle signé"
 
-          # ÉTAPE 4 : Vérifier la signature
-          codesign --verify --deep --strict "$APP" && echo "✅ Vérification signature OK"
+          # ÉTAPE 4 : Vérifier la signature (fail le CI si cassée)
+          codesign --verify --deep --strict --verbose=2 "$APP" && echo "✅ Vérification signature OK"
           codesign -dv "$APP" 2>&1 | grep -E "Authority|TeamID|Timestamp"
+          spctl -a -vvv "$APP" 2>&1 | grep -E "accepted|rejected|source" || true
 
           # ÉTAPE 5 : Notariser l'APP (pas le DMG) via un zip temporaire
           ditto -c -k --keepParent "$APP" /tmp/Gilbert.zip
