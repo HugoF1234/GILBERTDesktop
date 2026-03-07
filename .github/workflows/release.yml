@@ -140,9 +140,9 @@ jobs:
           rm -rf /tmp/dmg-content
           echo "✅ DMG créé avec app notarisée + staplée"
 
-          # ÉTAPE 9 : Stapler aussi le DMG (bonus)
-          xcrun stapler staple "$DMG"
-          echo "✅ DMG staplé"
+          # ÉTAPE 9 : Stapler aussi le DMG (best effort, pas bloquant)
+          xcrun stapler staple "$DMG" || echo "ℹ️ Staple DMG non disponible (normal si DMG non soumis séparément)"
+          echo "✅ Pipeline terminé"
 
           # Agréer (staple)
           xcrun stapler staple "$DMG"
