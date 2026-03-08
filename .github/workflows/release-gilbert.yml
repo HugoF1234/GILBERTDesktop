@@ -156,6 +156,12 @@ jobs:
           xcrun stapler validate "$APP" && echo "✅ Staple validé"
           spctl -a -vvv "$APP" 2>&1 | grep -E "accepted|rejected|source"
 
+          # ÉTAPE 7b : Retirer le flag quarantine de l'app avant de la mettre dans le DMG
+          # Sans ça, macOS propage le flag depuis le DMG téléchargé vers l'app installée,
+          # et Gatekeeper peut bloquer même une app correctement notarisée
+          xattr -cr "$APP"
+          echo "✅ Quarantine retiré de l'app"
+
           # ÉTAPE 8 : Créer le DMG esthétique avec hdiutil + AppleScript
           rm -f "$DMG"
           DMG_TMP="/tmp/Gilbert_tmp.dmg"
