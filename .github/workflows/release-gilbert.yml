@@ -194,20 +194,19 @@ jobs:
           sync
           hdiutil detach "$MOUNT_DIR" -force
 
-          # Convertir en DMG compressé final
+          # ÉTAPE 9 : Signer le DMG UDRW (read-write) avant conversion
+          # codesign sur UDZO (compressé) ne fonctionne pas — il faut signer avant compression
+          xattr -cr "$DMG_TMP"
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG_TMP"
+          echo "✅ DMG UDRW signé"
+          codesign -dv "$DMG_TMP" 2>&1 | grep -E "Authority|Timestamp"
+
+          # Convertir en DMG compressé final (après signature)
           hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG"
           rm -f "$DMG_TMP"
-          echo "✅ DMG esthétique créé"
+          echo "✅ DMG compressé créé"
 
-          # Nettoyer les xattrs du DMG converti avant signature (hdiutil convert peut ajouter des attributs)
-          xattr -cr "$DMG"
-
-          # ÉTAPE 9 : Signer le DMG avec Developer ID (obligatoire pour Gatekeeper)
-          codesign --force --timestamp --sign "$IDENTITY" "$DMG"
-          echo "✅ DMG signé"
-          codesign -dv "$DMG" 2>&1 | grep -E "Authority|Timestamp"
-
-          # ÉTAPE 10 : Notariser le DMG signé
+          # ÉTAPE 10 : Notariser le DMG compressé
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
