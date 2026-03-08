@@ -194,19 +194,18 @@ jobs:
           sync
           hdiutil detach "$MOUNT_DIR" -force
 
-          # ÉTAPE 9 : Signer le DMG UDRW (read-write) avant conversion
-          # codesign sur UDZO (compressé) ne fonctionne pas — il faut signer avant compression
-          xattr -cr "$DMG_TMP"
-          codesign --force --timestamp --sign "$IDENTITY" "$DMG_TMP"
-          echo "✅ DMG UDRW signé"
-          codesign -dv "$DMG_TMP" 2>&1 | grep -E "Authority|Timestamp"
-
-          # Convertir en DMG compressé final (après signature)
+          # Convertir en DMG compressé final
           hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG"
           rm -f "$DMG_TMP"
           echo "✅ DMG compressé créé"
 
-          # ÉTAPE 10 : Notariser le DMG compressé
+          # ÉTAPE 9 : Signer le DMG UDZO final
+          # hdiutil convert recrée le fichier entièrement → signer APRÈS la conversion
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG"
+          echo "✅ DMG signé"
+          codesign -dv "$DMG" 2>&1 | grep -E "Authority|Timestamp"
+
+          # ÉTAPE 10 : Notariser le DMG signé
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
