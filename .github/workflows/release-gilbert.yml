@@ -100,7 +100,7 @@ jobs:
 
           # 1c : helpers/exécutables dans Frameworks (hors binaire principal)
           if [ -d "$APP/Contents/Frameworks" ]; then
-            find "$APP/Contents/Frameworks" -type f -perm +111 | while read f; do
+            find "$APP/Contents/Frameworks" -type f -perm -111 | while read f; do
               codesign --force --sign "$IDENTITY" --timestamp --options runtime "$f" || true
             done
           fi
@@ -198,6 +198,9 @@ jobs:
           hdiutil convert "$DMG_TMP" -format UDZO -imagekey zlib-level=9 -o "$DMG"
           rm -f "$DMG_TMP"
           echo "✅ DMG esthétique créé"
+
+          # Nettoyer les xattrs du DMG converti avant signature (hdiutil convert peut ajouter des attributs)
+          xattr -cr "$DMG"
 
           # ÉTAPE 9 : Signer le DMG avec Developer ID (obligatoire pour Gatekeeper)
           codesign --force --timestamp --sign "$IDENTITY" "$DMG"
