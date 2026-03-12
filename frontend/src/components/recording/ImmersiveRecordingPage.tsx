@@ -36,6 +36,7 @@ import {
   tauriGetMicLevel,
   tauriGetSystemAudioLevel,
   tauriRecordingService,
+  tauriHasSystemAudioPermission,
 } from '@/services/tauriRecordingService';
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'processing';
@@ -137,6 +138,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [audioLevel, setAudioLevel] = useState(0);
   const [systemAudioLevel, setSystemAudioLevel] = useState(0);
   const [systemAudioActive, setSystemAudioActive] = useState(false);
+  const [systemAudioPermission, setSystemAudioPermission] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [isUploading, setIsUploading] = useState(false); // État local pour l'UI
@@ -168,6 +170,14 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const dotLottieRef = useRef<any>(null);
   const isDiscardingRef = useRef(false); // Flag pour éviter de rouvrir le dialog après discard
   const [, forceUpdate] = useState(0);
+
+  // ── Vérification permission son système (Tauri, macOS) ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    tauriHasSystemAudioPermission()
+      .then((hasPerm) => setSystemAudioPermission(hasPerm))
+      .catch(() => setSystemAudioPermission(false));
+  }, []);
 
   // ── Gestion Tauri au montage/démontage ──
   useEffect(() => {
@@ -1333,12 +1343,20 @@ export function ImmersiveRecordingPage(): JSX.Element {
               {isTauriApp() && (
                 <div className="flex items-center justify-center gap-2 mb-4 -mt-2">
                   <div
-                    className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300"
+                    className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 cursor-default"
                     style={{
                       backgroundColor: isActive && systemAudioActive
                         ? 'rgba(16, 185, 129, 0.10)'
-                        : 'rgba(148, 163, 184, 0.08)',
-                      border: `1px solid ${isActive && systemAudioActive ? 'rgba(16, 185, 129, 0.35)' : 'rgba(148, 163, 184, 0.20)'}`,
+                        : systemAudioPermission === false && !isActive
+                          ? 'rgba(239, 68, 68, 0.08)'
+                          : 'rgba(148, 163, 184, 0.08)',
+                      border: `1px solid ${
+                        isActive && systemAudioActive
+                          ? 'rgba(16, 185, 129, 0.35)'
+                          : systemAudioPermission === false && !isActive
+                            ? 'rgba(239, 68, 68, 0.25)'
+                            : 'rgba(148, 163, 184, 0.20)'
+                      }`,
                     }}
                   >
                     {/* Point indicateur */}
@@ -1347,14 +1365,19 @@ export function ImmersiveRecordingPage(): JSX.Element {
                       style={{
                         backgroundColor: isActive && systemAudioActive
                           ? '#10b981'
-                          : state === 'idle' ? '#94a3b8' : '#f59e0b',
+                          : isActive && !systemAudioActive
+                            ? '#f59e0b'
+                            : systemAudioPermission === false
+                              ? '#ef4444'
+                              : systemAudioPermission === true
+                                ? '#10b981'
+                                : '#94a3b8',
                         boxShadow: isActive && systemAudioActive
                           ? '0 0 6px rgba(16, 185, 129, 0.6)'
                           : 'none',
-                        animation: isActive && systemAudioActive ? 'pulse 1.5s infinite' : 'none',
                       }}
                     />
-                    {/* Barre de niveau système (mini VU-mètre) */}
+                    {/* Mini VU-mètre pendant l'enregistrement */}
                     {isActive && (
                       <div className="flex items-center gap-px">
                         {Array.from({ length: 8 }).map((_, i) => (
@@ -1375,14 +1398,26 @@ export function ImmersiveRecordingPage(): JSX.Element {
                     <span
                       className="transition-colors duration-300"
                       style={{
-                        color: isActive && systemAudioActive ? '#10b981' : '#94a3b8',
+                        color: isActive && systemAudioActive
+                          ? '#10b981'
+                          : isActive && !systemAudioActive
+                            ? '#f59e0b'
+                            : systemAudioPermission === false
+                              ? '#ef4444'
+                              : systemAudioPermission === true
+                                ? '#64748b'
+                                : '#94a3b8',
                       }}
                     >
                       {isActive
                         ? systemAudioActive
                           ? 'Son système actif'
                           : 'Son système silencieux'
-                        : 'Son système'}
+                        : systemAudioPermission === false
+                          ? 'Son système : permission manquante'
+                          : systemAudioPermission === true
+                            ? 'Son système : activé'
+                            : 'Son système'}
                     </span>
                   </div>
                 </div>
