@@ -420,6 +420,94 @@ fn get_session_nonce() -> String {
     SESSION_NONCE.get_or_init(generate_session_nonce).clone()
 }
 
+// ── Mini-widget flottant ─────────────────────────────────────────────────────
+
+/// Affiche le mini-widget flottant (crée la fenêtre si elle n'existe pas encore)
+#[tauri::command]
+fn show_widget(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(widget) = app_handle.get_window("widget") {
+        let _ = widget.show();
+        let _ = widget.set_focus();
+        return Ok(());
+    }
+    // Créer la fenêtre widget
+    tauri::WindowBuilder::new(
+        &app_handle,
+        "widget",
+        tauri::WindowUrl::App("widget.html".into()),
+    )
+    .title("Gilbert Widget")
+    .inner_size(220.0, 72.0)
+    .min_inner_size(180.0, 60.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .transparent(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Cache le mini-widget flottant
+#[tauri::command]
+fn hide_widget(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(widget) = app_handle.get_window("widget") {
+        let _ = widget.hide();
+    }
+    Ok(())
+}
+
+/// Toggle visibilité du mini-widget
+#[tauri::command]
+fn toggle_widget(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if let Some(widget) = app_handle.get_window("widget") {
+        if widget.is_visible().unwrap_or(false) {
+            let _ = widget.hide();
+        } else {
+            let _ = widget.show();
+            let _ = widget.set_focus();
+        }
+        return Ok(());
+    }
+    show_widget(app_handle)
+}
+
+// ── Notifications interactives via AppleScript ───────────────────────────────
+
+/// Envoie une notification interactive macOS avec un bouton "Enregistrer"
+/// via osascript. Retourne true si l'utilisateur a cliqué sur "Enregistrer".
+#[tauri::command]
+async fn notify_mic_activity(app_name: Option<String>) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let (title, msg) = if let Some(ref name) = app_name {
+            (
+                format!("Réunion {} détectée", name),
+                "Voulez-vous enregistrer avec Gilbert ?".to_string(),
+            )
+        } else {
+            (
+                "Micro actif".to_string(),
+                "Démarrer un enregistrement Gilbert ?".to_string(),
+            )
+        };
+        let script = format!(
+            r#"display dialog "{}" with title "Gilbert — {}" buttons {{"Ignorer", "Enregistrer"}} default button "Enregistrer" with icon note giving up after 15"#,
+            msg, title
+        );
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            return stdout.contains("Enregistrer");
+        }
+    }
+    false
+}
+
 /// Get the current system audio level (for UI visualization)
 /// Returns a value between 0.0 and 1.0
 #[tauri::command]
@@ -438,13 +526,19 @@ fn get_mic_audio_level() -> f32 {
 fn create_tray_menu() -> SystemTrayMenu {
     let show = CustomMenuItem::new("show".to_string(), "Afficher Gilbert");
     let hide = CustomMenuItem::new("hide".to_string(), "Masquer");
+    let widget = CustomMenuItem::new("widget".to_string(), "Mini-widget  ⊞");
     let separator = SystemTrayMenuItem::Separator;
+    let start_rec = CustomMenuItem::new("start_rec".to_string(), "▶  Démarrer enregistrement");
+    let separator2 = SystemTrayMenuItem::Separator;
     let quit = CustomMenuItem::new("quit".to_string(), "Quitter");
 
     SystemTrayMenu::new()
         .add_item(show)
         .add_item(hide)
+        .add_item(widget)
         .add_native_item(separator)
+        .add_item(start_rec)
+        .add_native_item(separator2)
         .add_item(quit)
 }
 
@@ -482,6 +576,19 @@ fn main() {
                     if let Some(window) = app.get_window("main") {
                         let _ = window.hide();
                     }
+                }
+                "widget" => {
+                    let _ = toggle_widget(app.clone());
+                }
+                "start_rec" => {
+                    // Afficher la fenêtre principale et envoyer un event pour démarrer l'enregistrement
+                    if let Some(window) = app.get_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.unminimize();
+                    }
+                    // Émettre un event Tauri que le frontend écoute pour démarrer automatiquement
+                    let _ = app.emit_all("tray-start-recording", ());
                 }
                 "quit" => {
                     std::process::exit(0);
@@ -645,7 +752,11 @@ fn main() {
             stop_system_audio,
             get_system_audio_level,
             get_mic_audio_level,
-            get_session_nonce
+            get_session_nonce,
+            show_widget,
+            hide_widget,
+            toggle_widget,
+            notify_mic_activity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

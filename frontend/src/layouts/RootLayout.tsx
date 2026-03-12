@@ -17,6 +17,7 @@ import type { ViewType } from '../types/router';
 import type { RouteContextType } from '../hooks/useRouteContext';
 import { recordingManager } from '../services/recordingManager';
 import { recordingStorage } from '../services/recordingStorage';
+import { isTauriApp } from '../services/tauriRecordingService';
 
 // Import des bannières
 import GenerationBanner from '../components/GenerationBanner';
@@ -420,6 +421,26 @@ function RootLayout(): React.ReactElement {
   const handleCloseUploadWarning = useCallback((): void => {
     setShowUploadWarning(false);
   }, []);
+
+  // ── Écoute des events Tauri globaux (tray menu, widget) ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    const tauri = (window as any).__TAURI__;
+    if (!tauri?.event?.listen) return;
+
+    // Event depuis le tray "Démarrer enregistrement" → naviguer vers / et démarrer
+    const unlistenPromise = tauri.event.listen('tray-start-recording', () => {
+      navigate('/', { replace: false });
+      // Petit délai pour laisser la page se monter avant d'émettre l'event de démarrage
+      setTimeout(() => {
+        tauri.event.emit?.('widget-auto-start-recording', {});
+      }, 300);
+    });
+
+    return () => {
+      unlistenPromise.then((unlisten: () => void) => unlisten()).catch(() => {});
+    };
+  }, [navigate]);
 
   // Context passé aux routes enfants via Outlet
   const outletContext: RouteContextType = useMemo(() => ({

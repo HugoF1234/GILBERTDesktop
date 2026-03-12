@@ -39,6 +39,10 @@ import {
   tauriHasSystemAudioPermission,
 } from '@/services/tauriRecordingService';
 
+// Invoke Tauri sans dépendance SDK
+const tauriInvoke = (cmd: string, args?: Record<string, unknown>) =>
+  ((window as any).__TAURI__?.tauri?.invoke || (window as any).__TAURI__?.core?.invoke)?.(cmd, args);
+
 type RecordingState = 'idle' | 'recording' | 'paused' | 'processing';
 
 interface AudioDevice {
@@ -141,6 +145,18 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [systemAudioPermission, setSystemAudioPermission] = useState<boolean | null>(null);
   // Ref pour le debounce de la désactivation du son système (évite le clignotement)
   const systemAudioOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Écoute auto-start depuis tray / widget ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    const tauri = (window as any).__TAURI__;
+    if (!tauri?.event?.listen) return;
+    const p = tauri.event.listen('widget-auto-start-recording', () => {
+      if (state === 'idle') handleStart();
+    });
+    return () => { p.then((u: () => void) => u()).catch(() => {}); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
   const [error, setError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [isUploading, setIsUploading] = useState(false); // État local pour l'UI
@@ -1342,9 +1358,27 @@ export function ImmersiveRecordingPage(): JSX.Element {
           </AnimatePresence>
         </div>
 
+        {/* Bouton mini-widget flottant (Tauri uniquement) */}
+        {isTauriApp() && (
+          <Button
+            onClick={() => tauriInvoke('toggle_widget')}
+            className="flex items-center gap-2 px-3 py-2 text-sm text-slate-500 hover:text-slate-700
+                       rounded-xl bg-white/80 hover:bg-white border border-slate-200/60
+                       transition-all duration-200 shadow-sm"
+            type="button"
+            title="Mini-widget flottant"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="7" width="20" height="14" rx="2"/>
+              <path d="M16 3h2a2 2 0 0 1 2 2"/>
+              <path d="M8 3H6a2 2 0 0 0-2 2"/>
+            </svg>
+            <span className="hidden sm:inline">Widget</span>
+          </Button>
+        )}
+
         {/* Bouton Récupérer : même taille que le bouton Micro, sous le micro */}
-        {hasPendingRecordings && (
-          <motion.div
+        {hasPendingRecordings && (          <motion.div
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}

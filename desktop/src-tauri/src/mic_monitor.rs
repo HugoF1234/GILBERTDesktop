@@ -11,7 +11,6 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     SampleFormat, Stream,
 };
-use tauri::api::notification::Notification;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -74,7 +73,7 @@ impl MicMonitor {
 
         let monitoring_flag = self.monitoring.clone();
         let last_notif = self.last_notification.clone();
-        let app_id = self.app_identifier.clone();
+        let app_handle_opt = self.app_handle.clone();
 
         // Seuil RMS : détecte une vraie activité vocale (pas juste le bruit de fond)
         const RMS_THRESHOLD: f32 = 0.008;
@@ -116,28 +115,18 @@ impl MicMonitor {
                                             .map(|v| v.to_string())
                                     });
 
-                                    let (title, body) = if let Some(ref app_name) = video_app {
-                                        (
-                                            "Gilbert — Réunion détectée".to_string(),
-                                            format!("{} actif — Voulez-vous enregistrer ?",
-                                                capitalize(app_name)),
-                                        )
-                                    } else {
-                                        (
-                                            "Gilbert — Micro actif".to_string(),
-                                            "Votre micro est actif — Démarrer un enregistrement ?".to_string(),
-                                        )
-                                    };
+                                    let video_app_name = video_app.clone();
+                                    let app_handle_clone = app_handle_opt.clone();
+                                    println!("🔔 MicMonitor: activité détectée, app={:?} | RMS={:.4}", video_app_name, rms);
 
-                                    println!("🔔 Notif: {} | RMS={:.4}", title, rms);
-                                    let _ = Notification::new(&app_id)
-                                        .title(&title)
-                                        .body(&body)
-                                        .show();
+                                    // Lancer la notification interactive dans un thread séparé
+                                    // pour ne pas bloquer le thread audio
+                                    std::thread::spawn(move || {
+                                        notify_with_action(video_app_name, app_handle_clone);
+                                    });
 
                                     last_notif.store(now_sys, Ordering::SeqCst);
-                                    *guard = None; // reset pour éviter le spam
-                                }
+                                    *guard = None; // reset pour éviter le spam                                }
                             }
                         }
                     }
@@ -261,5 +250,68 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+/// Envoie une notification interactive via osascript (macOS uniquement).
+/// Si l'utilisateur clique "Enregistrer", on émet un event Tauri vers le frontend.
+fn notify_with_action(video_app: Option<String>, app_handle: Option<tauri::AppHandle>) {
+    #[cfg(target_os = "macos")]
+    {
+        let (dialog_title, msg) = if let Some(ref name) = video_app {
+            (
+                format!("Gilbert — Réunion {} détectée", capitalize(name)),
+                format!("{} est actif. Enregistrer cette réunion avec Gilbert ?", capitalize(name)),
+            )
+        } else {
+            (
+                "Gilbert — Micro actif".to_string(),
+                "Votre micro est actif. Démarrer un enregistrement ?".to_string(),
+            )
+        };
+        let script = format!(
+            r#"display dialog "{}" with title "{}" buttons {{"Ignorer", "Enregistrer"}} default button "Enregistrer" with icon note giving up after 20"#,
+            msg, dialog_title
+        );
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.contains("Enregistrer") {
+                println!("✅ [MicMonitor] Utilisateur a cliqué Enregistrer → event tray-start-recording");
+                // Émettre un event Tauri pour que le frontend démarre l'enregistrement
+                if let Some(handle) = app_handle {
+                    let _ = handle.emit_all("tray-start-recording", ());
+                    // Afficher la fenêtre principale
+                    if let Some(window) = handle.get_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.unminimize();
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Sur Windows/Linux : notification simple sans bouton
+        use tauri::api::notification::Notification;
+        let (title, body) = if let Some(ref name) = video_app {
+            (
+                format!("Gilbert — Réunion {}", capitalize(name)),
+                format!("{} actif — Ouvrez Gilbert pour enregistrer", capitalize(name)),
+            )
+        } else {
+            (
+                "Gilbert — Micro actif".to_string(),
+                "Ouvrez Gilbert pour démarrer un enregistrement".to_string(),
+            )
+        };
+        let _ = Notification::new("com.gilbert.desktop")
+            .title(&title)
+            .body(&body)
+            .show();
     }
 }
