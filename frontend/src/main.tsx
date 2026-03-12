@@ -1,6 +1,5 @@
 /**
  * Point d'entrée de l'application Gilbert
- * Utilise React Router v7 pour la navigation multi-URL
  */
 
 import React from 'react';
@@ -25,9 +24,7 @@ try {
   const stored = localStorage.getItem(dataStoreKey);
   if (stored) {
     const size = new Blob([stored]).size;
-    logger.debug(`📦 [MAIN] Cache localStorage: ${(size / 1024).toFixed(1)} KB`);
     if (size > 2 * 1024 * 1024) {
-      logger.warn('⚠️ [MAIN] Cache trop volumineux, nettoyage...');
       localStorage.removeItem(dataStoreKey);
     }
   }
@@ -36,15 +33,18 @@ try {
 }
 
 // ============================================================================
-// COLD START TAURI — détection via nonce de session Rust
+// COLD START TAURI — détection via sessionStorage
 //
-// À chaque démarrage du process Rust, un nonce unique est généré (OnceLock).
-// On le compare au nonce stocké dans localStorage :
-//   - Différent ou absent → cold start → vider l'auth
-//   - Identique → rechargement interne (navigation React) → conserver la session
+// Le sessionStorage est GARANTI vide à chaque nouveau lancement du process macOS.
+// C'est un comportement natif WebKit : sessionStorage ne persiste pas entre
+// les lancements de l'app (contrairement à localStorage).
 //
-// Cela garantit que l'utilisateur arrive sur la page de connexion à chaque
-// ouverture de l'app, sans impacter les navigations internes.
+// Stratégie :
+//   - Absence de 'gilbert_app_session' dans sessionStorage = cold start (nouveau lancement)
+//   - Présence = navigation interne React (rechargement JS sans fermeture de l'app)
+//
+// Au cold start → vider localStorage auth → poser le flag sessionStorage
+// En interne → ne rien faire (session conservée)
 // ============================================================================
 const SESSION_AUTH_KEYS = [
   'auth_token',
@@ -54,60 +54,46 @@ const SESSION_AUTH_KEYS = [
   'gilbert-data-store',
 ];
 
-const NONCE_STORAGE_KEY = 'gilbert_session_nonce';
-const isTauriEnv = typeof (window as any).__TAURI_IPC__ !== 'undefined'
-  || typeof (window as any).__TAURI__ !== 'undefined';
+const COLD_START_SESSION_FLAG = 'gilbert_app_session';
 
-async function checkColdStart(): Promise<void> {
-  if (!isTauriEnv) return;
+// Détection Tauri : synchrone, disponible dès le chargement du script
+const isTauriEnv =
+  typeof (window as any).__TAURI_IPC__ !== 'undefined' ||
+  typeof (window as any).__TAURI__ !== 'undefined' ||
+  // Fallback : Tauri injecte '__TAURI_METADATA__' dans certaines versions
+  typeof (window as any).__TAURI_METADATA__ !== 'undefined';
 
-  try {
-    // invoke Tauri sans importer le SDK (withGlobalTauri=true expose window.__TAURI__.tauri.invoke)
-    const invoke = (window as any).__TAURI__?.tauri?.invoke
-      || (window as any).__TAURI__?.core?.invoke;
+if (isTauriEnv) {
+  const alreadyRunning = sessionStorage.getItem(COLD_START_SESSION_FLAG);
 
-    if (!invoke) {
-      // __TAURI__ pas encore injecté (race condition au tout premier rendu)
-      // → vider par précaution
-      SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
-      logger.info('🔒 [COLD START] __TAURI__ non disponible → auth vidée par précaution');
-      return;
-    }
-
-    const rustNonce: string = await invoke('get_session_nonce');
-    const storedNonce = localStorage.getItem(NONCE_STORAGE_KEY);
-
-    if (storedNonce !== rustNonce) {
-      // Nouveau process Rust → cold start
-      SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
-      localStorage.setItem(NONCE_STORAGE_KEY, rustNonce);
-      logger.info('🔒 [COLD START] Nouveau process Rust détecté → auth vidée');
-    } else {
-      logger.debug('🔄 [COLD START] Rechargement interne → session conservée');
-    }
-  } catch (e) {
-    // En cas d'erreur : vider par précaution
-    SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
-    logger.warn('⚠️ [COLD START] Erreur nonce → auth vidée par précaution:', e);
+  if (!alreadyRunning) {
+    // Premier chargement de cette session → cold start
+    SESSION_AUTH_KEYS.forEach((key) => {
+      try { localStorage.removeItem(key); } catch {}
+    });
+    sessionStorage.setItem(COLD_START_SESSION_FLAG, '1');
+    logger.info('🔒 [COLD START] Nouvelle session Tauri → auth vidée, retour connexion');
+  } else {
+    logger.debug('🔄 [COLD START] Session en cours → auth conservée');
   }
 }
 
-// Lancer le check cold start de façon synchrone (bloquante avant render)
-// puis render une fois la vérification terminée
-checkColdStart().finally(() => {
-  // Resume token auto-refresh if user is already logged in (après cold start check)
-  initTokenRefresh();
+// ============================================================================
+// RENDER
+// ============================================================================
 
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <ErrorBoundary>
-        <ThemeProvider theme={theme}>
-          <NotificationProvider>
-            <CssBaseline />
-            <RouterProvider router={router} />
-          </NotificationProvider>
-        </ThemeProvider>
-      </ErrorBoundary>
-    </React.StrictMode>
-  );
-});
+// Resume token auto-refresh if user is already logged in
+initTokenRefresh();
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ErrorBoundary>
+      <ThemeProvider theme={theme}>
+        <NotificationProvider>
+          <CssBaseline />
+          <RouterProvider router={router} />
+        </NotificationProvider>
+      </ThemeProvider>
+    </ErrorBoundary>
+  </React.StrictMode>
+);

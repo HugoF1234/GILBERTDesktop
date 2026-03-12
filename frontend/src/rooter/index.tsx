@@ -69,25 +69,24 @@ const AuthFormWrapper = () => {
   const handleAuthSuccess = () => {
     // Vérifier que le token est bien stocké avant de naviguer
     const token = localStorage.getItem('auth_token');
+    const from = (location.state as any)?.from?.pathname || '/';
+
     if (!token) {
-      logger.error('Token not found after login');
-      // Attendre un peu et réessayer
+      // Attendre un peu et réessayer (cas rare où le localStorage n'est pas encore flushé)
       setTimeout(() => {
         const retryToken = localStorage.getItem('auth_token');
         if (retryToken) {
-          const from = (location.state as any)?.from?.pathname || '/';
           navigate(from, { replace: true });
         } else {
-          logger.error('Token still not found after retry');
+          logger.error('[AuthFormWrapper] Token still not found after retry');
         }
       }, 100);
       return;
     }
     
-    // Rediriger vers la page d'origine ou vers la page d'accueil
-    const from = (location.state as any)?.from?.pathname || '/';
-    // Utiliser window.location pour forcer un rechargement complet et vérifier l'authentification
-    window.location.href = from;
+    // Navigation interne React — PAS de window.location.href pour éviter un rechargement
+    // complet qui re-déclenche le cold start et vide le token qu'on vient de stocker.
+    navigate(from, { replace: true });
   };
   
   return (

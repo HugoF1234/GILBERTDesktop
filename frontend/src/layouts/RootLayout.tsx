@@ -16,7 +16,6 @@ import { getViewFromPath, VIEW_TO_PATH } from '../types/router';
 import type { ViewType } from '../types/router';
 import type { RouteContextType } from '../hooks/useRouteContext';
 import { recordingManager } from '../services/recordingManager';
-import { isTauriApp } from '../services/tauriRecordingService';
 import { recordingStorage } from '../services/recordingStorage';
 
 // Import des bannières
@@ -234,11 +233,7 @@ function RootLayout(): React.ReactElement {
       const isValid = await verifyTokenValidity();
       if (!isValid) {
         setIsLoading(false);
-        // Sur desktop Tauri : ne jamais rediriger vers /auth automatiquement
-        // L'utilisateur garde son accès même si le token semble invalide (peut être une erreur temporaire)
-        if (!isTauriApp()) {
-          navigate('/auth', { replace: true });
-        }
+        navigate('/auth', { replace: true });
         return;
       }
 
@@ -310,9 +305,7 @@ function RootLayout(): React.ReactElement {
           // Nettoyer l'URL même en cas d'erreur
           window.history.replaceState({}, document.title, window.location.pathname);
           setIsLoading(false);
-          if (!isTauriApp()) {
-            navigate('/auth', { replace: true });
-          }
+          navigate('/auth', { replace: true });
         }
       }
     };
