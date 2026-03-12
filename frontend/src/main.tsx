@@ -66,21 +66,27 @@ const isTauriEnv = typeof (window as any).__TAURI__ !== 'undefined'
 
 if (isTauriEnv) {
   // Écouter l'event cold-start émis par Rust au setup()
-  import('@tauri-apps/api/event').then(({ listen }) => {
-    listen('app-cold-start', () => {
-      clearSessionStorage();
-      // Rediriger vers la page d'auth si on est sur une page authentifiée
-      if (!window.location.pathname.startsWith('/auth')) {
-        window.location.replace('/auth');
-      }
-    }).then((unlisten) => {
-      // Conserver l'unlisten pour nettoyage éventuel
-      (window as any).__coldStartUnlisten = unlisten;
-    });
-    logger.debug('👂 [COLD START] Écoute de app-cold-start activée');
-  }).catch((e) => {
-    logger.warn('⚠️ [COLD START] Impossible d\'écouter app-cold-start:', e);
-  });
+  // Utilise window.__TAURI__.event directement (pas d'import SDK externe)
+  const tryListen = () => {
+    const tauriEvent = (window as any).__TAURI__?.event;
+    if (tauriEvent?.listen) {
+      tauriEvent.listen('app-cold-start', () => {
+        clearSessionStorage();
+        if (!window.location.pathname.startsWith('/auth')) {
+          window.location.replace('/auth');
+        }
+      }).then((unlisten: () => void) => {
+        (window as any).__coldStartUnlisten = unlisten;
+        logger.debug('👂 [COLD START] Écoute de app-cold-start activée');
+      }).catch((e: unknown) => {
+        logger.warn('⚠️ [COLD START] listen échoué:', e);
+      });
+    } else {
+      // __TAURI__ pas encore prêt, réessayer dans 100ms
+      setTimeout(tryListen, 100);
+    }
+  };
+  tryListen();
 }
 
 // Resume token auto-refresh if user is already logged in
