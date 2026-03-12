@@ -139,6 +139,8 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [systemAudioLevel, setSystemAudioLevel] = useState(0);
   const [systemAudioActive, setSystemAudioActive] = useState(false);
   const [systemAudioPermission, setSystemAudioPermission] = useState<boolean | null>(null);
+  // Ref pour le debounce de la désactivation du son système (évite le clignotement)
+  const systemAudioOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [isUploading, setIsUploading] = useState(false); // État local pour l'UI
@@ -172,11 +174,28 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [, forceUpdate] = useState(0);
 
   // ── Vérification permission son système (Tauri, macOS) ──
+  // Retry car __TAURI__ peut ne pas être disponible immédiatement après une navigation
   useEffect(() => {
-    if (!isTauriApp()) return;
-    tauriHasSystemAudioPermission()
-      .then((hasPerm) => setSystemAudioPermission(hasPerm))
-      .catch(() => setSystemAudioPermission(false));
+    let cancelled = false;
+    const check = async (retries = 3): Promise<void> => {
+      if (cancelled) return;
+      // Attendre que __TAURI__ soit disponible (peut prendre quelques ms après navigation)
+      if (!isTauriApp()) {
+        if (retries > 0) {
+          setTimeout(() => check(retries - 1), 200);
+          return;
+        }
+        return;
+      }
+      try {
+        const hasPerm = await tauriHasSystemAudioPermission();
+        if (!cancelled) setSystemAudioPermission(hasPerm);
+      } catch {
+        if (!cancelled) setSystemAudioPermission(false);
+      }
+    };
+    check();
+    return () => { cancelled = true; };
   }, []);
 
   // ── Gestion Tauri au montage/démontage ──
@@ -216,6 +235,11 @@ export function ImmersiveRecordingPage(): JSX.Element {
       // Au démontage : stopper le polling audio uniquement
       // Le timer (__gilbertDurationInterval) continue à tourner — RecordingBanner lit le store
       tauriRecordingService.stopAudioLevelPolling();
+      // Nettoyer le debounce du son système
+      if (systemAudioOffTimerRef.current) {
+        clearTimeout(systemAudioOffTimerRef.current);
+        systemAudioOffTimerRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -617,7 +641,22 @@ export function ImmersiveRecordingPage(): JSX.Element {
           onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
           onSystemLevel: (level) => {
             setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
-            setSystemAudioActive(level > 0.01);
+            if (level > 0.01) {
+              // Son détecté → activer immédiatement et annuler le timer d'extinction
+              if (systemAudioOffTimerRef.current) {
+                clearTimeout(systemAudioOffTimerRef.current);
+                systemAudioOffTimerRef.current = null;
+              }
+              setSystemAudioActive(true);
+            } else {
+              // Son absent → attendre 2s avant de passer à inactif (debounce)
+              if (!systemAudioOffTimerRef.current) {
+                systemAudioOffTimerRef.current = setTimeout(() => {
+                  setSystemAudioActive(false);
+                  systemAudioOffTimerRef.current = null;
+                }, 2000);
+              }
+            }
           },
         });
 
@@ -724,7 +763,20 @@ export function ImmersiveRecordingPage(): JSX.Element {
         onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
         onSystemLevel: (level) => {
           setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
-          setSystemAudioActive(level > 0.01);
+          if (level > 0.01) {
+            if (systemAudioOffTimerRef.current) {
+              clearTimeout(systemAudioOffTimerRef.current);
+              systemAudioOffTimerRef.current = null;
+            }
+            setSystemAudioActive(true);
+          } else {
+            if (!systemAudioOffTimerRef.current) {
+              systemAudioOffTimerRef.current = setTimeout(() => {
+                setSystemAudioActive(false);
+                systemAudioOffTimerRef.current = null;
+              }, 2000);
+            }
+          }
         },
       });
       // Reprendre le timer (approximation basée sur la durée actuelle)
@@ -1343,81 +1395,61 @@ export function ImmersiveRecordingPage(): JSX.Element {
               {isTauriApp() && (
                 <div className="flex items-center justify-center gap-2 mb-4 -mt-2">
                   <div
-                    className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 cursor-default"
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium cursor-default"
                     style={{
-                      backgroundColor: isActive && systemAudioActive
-                        ? 'rgba(16, 185, 129, 0.10)'
-                        : systemAudioPermission === false && !isActive
-                          ? 'rgba(239, 68, 68, 0.08)'
-                          : 'rgba(148, 163, 184, 0.08)',
+                      backgroundColor: systemAudioPermission === false
+                        ? 'rgba(239, 68, 68, 0.08)'
+                        : 'rgba(148, 163, 184, 0.08)',
                       border: `1px solid ${
-                        isActive && systemAudioActive
-                          ? 'rgba(16, 185, 129, 0.35)'
-                          : systemAudioPermission === false && !isActive
-                            ? 'rgba(239, 68, 68, 0.25)'
-                            : 'rgba(148, 163, 184, 0.20)'
+                        systemAudioPermission === false
+                          ? 'rgba(239, 68, 68, 0.20)'
+                          : 'rgba(148, 163, 184, 0.18)'
                       }`,
                     }}
                   >
-                    {/* Point indicateur */}
+                    {/* Pastille de statut */}
                     <div
-                      className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300"
+                      className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{
-                        backgroundColor: isActive && systemAudioActive
-                          ? '#10b981'
-                          : isActive && !systemAudioActive
-                            ? '#f59e0b'
-                            : systemAudioPermission === false
-                              ? '#ef4444'
+                        backgroundColor:
+                          systemAudioPermission === false
+                            ? '#ef4444'
+                            : isActive && systemAudioActive
+                              ? '#10b981'
                               : systemAudioPermission === true
                                 ? '#10b981'
                                 : '#94a3b8',
-                        boxShadow: isActive && systemAudioActive
-                          ? '0 0 6px rgba(16, 185, 129, 0.6)'
-                          : 'none',
+                        boxShadow:
+                          isActive && systemAudioActive
+                            ? '0 0 5px rgba(16, 185, 129, 0.55)'
+                            : 'none',
                       }}
                     />
-                    {/* Mini VU-mètre pendant l'enregistrement */}
+                    {/* Mini VU-mètre visible uniquement pendant l'enregistrement actif */}
                     {isActive && (
                       <div className="flex items-center gap-px">
-                        {Array.from({ length: 8 }).map((_, i) => (
+                        {Array.from({ length: 6 }).map((_, i) => (
                           <div
                             key={i}
                             className="w-0.5 rounded-full transition-all duration-75"
                             style={{
-                              height: `${6 + i * 1.5}px`,
-                              backgroundColor: systemAudioLevel * 8 > i
-                                ? (i < 5 ? '#10b981' : i < 7 ? '#f59e0b' : '#ef4444')
-                                : 'rgba(148, 163, 184, 0.25)',
+                              height: `${5 + i * 1.5}px`,
+                              backgroundColor: systemAudioLevel * 6 > i
+                                ? (i < 4 ? '#10b981' : '#f59e0b')
+                                : 'rgba(148, 163, 184, 0.22)',
                             }}
                           />
                         ))}
                       </div>
                     )}
-                    {/* Label */}
                     <span
-                      className="transition-colors duration-300"
                       style={{
-                        color: isActive && systemAudioActive
-                          ? '#10b981'
-                          : isActive && !systemAudioActive
-                            ? '#f59e0b'
-                            : systemAudioPermission === false
-                              ? '#ef4444'
-                              : systemAudioPermission === true
-                                ? '#64748b'
-                                : '#94a3b8',
+                        color: systemAudioPermission === false ? '#ef4444' : '#64748b',
                       }}
                     >
-                      {isActive
-                        ? systemAudioActive
-                          ? 'Son système actif'
-                          : 'Son système silencieux'
-                        : systemAudioPermission === false
-                          ? 'Son système : permission manquante'
-                          : systemAudioPermission === true
-                            ? 'Son système : activé'
-                            : 'Son système'}
+                      {systemAudioPermission === false
+                        ? 'Son système : permission manquante'
+                        : 'Son système'}
                     </span>
                   </div>
                 </div>
