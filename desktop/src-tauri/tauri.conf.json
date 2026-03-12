@@ -24,8 +24,7 @@
       "targets": "all",
       "macOS": {
         "entitlements": "entitlements.mac.plist",
-        "minimumSystemVersion": "10.15",
-        "signingIdentity": "-"
+        "minimumSystemVersion": "10.15"
       }
     },
     "windows": [
