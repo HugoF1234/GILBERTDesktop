@@ -400,6 +400,26 @@ async fn stop_system_audio(state: tauri::State<'_, ArcAppState>) -> Result<Statu
     Ok(state.status().await)
 }
 
+/// Nonce de session unique généré au démarrage du process Rust.
+/// Permet au frontend de détecter un cold start : si le nonce stocké
+/// diffère du nonce actuel, c'est une nouvelle session → vider l'auth.
+static SESSION_NONCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn generate_session_nonce() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    // XOR avec l'adresse mémoire du stack pour plus d'entropie
+    let entropy = &nanos as *const _ as u128 ^ nanos;
+    format!("{:032x}", entropy)
+}
+
+#[tauri::command]
+fn get_session_nonce() -> String {
+    SESSION_NONCE.get_or_init(generate_session_nonce).clone()
+}
+
 /// Get the current system audio level (for UI visualization)
 /// Returns a value between 0.0 and 1.0
 #[tauri::command]
@@ -624,7 +644,8 @@ fn main() {
             start_system_audio,
             stop_system_audio,
             get_system_audio_level,
-            get_mic_audio_level
+            get_mic_audio_level,
+            get_session_nonce
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

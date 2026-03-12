@@ -29,26 +29,22 @@ try {
     if (size > 2 * 1024 * 1024) {
       logger.warn('⚠️ [MAIN] Cache trop volumineux, nettoyage...');
       localStorage.removeItem(dataStoreKey);
-      logger.debug('✅ [MAIN] Cache nettoyé');
     }
   }
 } catch (e) {
-  logger.warn('⚠️ [MAIN] Erreur accès localStorage, nettoyage complet...');
-  try {
-    localStorage.clear();
-    logger.debug('✅ [MAIN] localStorage vidé');
-  } catch (e2) {
-    logger.error('❌ [MAIN] Impossible de vider localStorage:', e2);
-  }
+  try { localStorage.clear(); } catch {}
 }
 
 // ============================================================================
-// COLD START TAURI : vider la session à chaque lancement de l'app
+// COLD START TAURI — détection via nonce de session Rust
 //
-// Principe : sessionStorage est vidé à chaque fermeture de la WebView Tauri.
-// Si le flag "gilbert_session_initialized" est absent → c'est un cold start
-// → on vide les clés d'auth dans localStorage et on pose le flag.
-// Les navigations internes (React Router) ne retriggerent pas ce code.
+// À chaque démarrage du process Rust, un nonce unique est généré (OnceLock).
+// On le compare au nonce stocké dans localStorage :
+//   - Différent ou absent → cold start → vider l'auth
+//   - Identique → rechargement interne (navigation React) → conserver la session
+//
+// Cela garantit que l'utilisateur arrive sur la page de connexion à chaque
+// ouverture de l'app, sans impacter les navigations internes.
 // ============================================================================
 const SESSION_AUTH_KEYS = [
   'auth_token',
@@ -58,36 +54,60 @@ const SESSION_AUTH_KEYS = [
   'gilbert-data-store',
 ];
 
-// Détection Tauri : withGlobalTauri=true expose window.__TAURI_IPC__
+const NONCE_STORAGE_KEY = 'gilbert_session_nonce';
 const isTauriEnv = typeof (window as any).__TAURI_IPC__ !== 'undefined'
   || typeof (window as any).__TAURI__ !== 'undefined';
 
-if (isTauriEnv) {
-  const COLD_START_FLAG = 'gilbert_session_initialized';
-  const alreadyInitialized = sessionStorage.getItem(COLD_START_FLAG);
+async function checkColdStart(): Promise<void> {
+  if (!isTauriEnv) return;
 
-  if (!alreadyInitialized) {
-    // Premier chargement depuis le lancement du process → cold start
+  try {
+    // invoke Tauri sans importer le SDK (withGlobalTauri=true expose window.__TAURI__.tauri.invoke)
+    const invoke = (window as any).__TAURI__?.tauri?.invoke
+      || (window as any).__TAURI__?.core?.invoke;
+
+    if (!invoke) {
+      // __TAURI__ pas encore injecté (race condition au tout premier rendu)
+      // → vider par précaution
+      SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
+      logger.info('🔒 [COLD START] __TAURI__ non disponible → auth vidée par précaution');
+      return;
+    }
+
+    const rustNonce: string = await invoke('get_session_nonce');
+    const storedNonce = localStorage.getItem(NONCE_STORAGE_KEY);
+
+    if (storedNonce !== rustNonce) {
+      // Nouveau process Rust → cold start
+      SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
+      localStorage.setItem(NONCE_STORAGE_KEY, rustNonce);
+      logger.info('🔒 [COLD START] Nouveau process Rust détecté → auth vidée');
+    } else {
+      logger.debug('🔄 [COLD START] Rechargement interne → session conservée');
+    }
+  } catch (e) {
+    // En cas d'erreur : vider par précaution
     SESSION_AUTH_KEYS.forEach((key) => localStorage.removeItem(key));
-    sessionStorage.setItem(COLD_START_FLAG, '1');
-    logger.info('🔒 [COLD START] Nouvelle session — auth vidée, retour connexion');
-  } else {
-    logger.debug('🔄 [COLD START] Rechargement interne — session conservée');
+    logger.warn('⚠️ [COLD START] Erreur nonce → auth vidée par précaution:', e);
   }
 }
 
-// Resume token auto-refresh if user is already logged in
-initTokenRefresh();
+// Lancer le check cold start de façon synchrone (bloquante avant render)
+// puis render une fois la vérification terminée
+checkColdStart().finally(() => {
+  // Resume token auto-refresh if user is already logged in (après cold start check)
+  initTokenRefresh();
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ErrorBoundary>
-      <ThemeProvider theme={theme}>
-        <NotificationProvider>
-          <CssBaseline />
-          <RouterProvider router={router} />
-        </NotificationProvider>
-      </ThemeProvider>
-    </ErrorBoundary>
-  </React.StrictMode>
-);
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <ErrorBoundary>
+        <ThemeProvider theme={theme}>
+          <NotificationProvider>
+            <CssBaseline />
+            <RouterProvider router={router} />
+          </NotificationProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
+    </React.StrictMode>
+  );
+});
