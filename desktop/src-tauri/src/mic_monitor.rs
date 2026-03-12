@@ -126,7 +126,8 @@ impl MicMonitor {
                                     });
 
                                     last_notif.store(now_sys, Ordering::SeqCst);
-                                    *guard = None; // reset pour éviter le spam                                }
+                                    *guard = None; // reset pour éviter le spam
+                                }
                             }
                         }
                     }
