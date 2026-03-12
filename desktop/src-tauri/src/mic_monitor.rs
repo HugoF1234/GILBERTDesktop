@@ -6,6 +6,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::System;
+use tauri::Manager;
 
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
