@@ -26,7 +26,6 @@ try {
   if (stored) {
     const size = new Blob([stored]).size;
     logger.debug(`📦 [MAIN] Cache localStorage: ${(size / 1024).toFixed(1)} KB`);
-    // Si le cache est trop gros (>2MB), le vider
     if (size > 2 * 1024 * 1024) {
       logger.warn('⚠️ [MAIN] Cache trop volumineux, nettoyage...');
       localStorage.removeItem(dataStoreKey);
@@ -41,6 +40,47 @@ try {
   } catch (e2) {
     logger.error('❌ [MAIN] Impossible de vider localStorage:', e2);
   }
+}
+
+// ============================================================================
+// COLD START TAURI : vider la session au lancement de l'app (pas au reload)
+// L'event "app-cold-start" est émis une seule fois par le process Rust.
+// Cela garantit qu'à chaque ouverture du DMG, l'utilisateur arrive sur
+// la page de connexion et non sur un compte précédemment connecté.
+// ============================================================================
+function clearSessionStorage(): void {
+  const SESSION_KEYS = [
+    'auth_token',
+    'token_issued_at',
+    'token_expires_in',
+    'meeting-transcriber-meetings-cache',
+    'gilbert-data-store',
+  ];
+  SESSION_KEYS.forEach((key) => localStorage.removeItem(key));
+  logger.info('🔒 [COLD START] Session vidée — retour à la page de connexion');
+}
+
+// Détection Tauri sans importer le SDK (évite l'import conditionnel)
+const isTauriEnv = typeof (window as any).__TAURI__ !== 'undefined'
+  || typeof (window as any).__TAURI_IPC__ !== 'undefined';
+
+if (isTauriEnv) {
+  // Écouter l'event cold-start émis par Rust au setup()
+  import('@tauri-apps/api/event').then(({ listen }) => {
+    listen('app-cold-start', () => {
+      clearSessionStorage();
+      // Rediriger vers la page d'auth si on est sur une page authentifiée
+      if (!window.location.pathname.startsWith('/auth')) {
+        window.location.replace('/auth');
+      }
+    }).then((unlisten) => {
+      // Conserver l'unlisten pour nettoyage éventuel
+      (window as any).__coldStartUnlisten = unlisten;
+    });
+    logger.debug('👂 [COLD START] Écoute de app-cold-start activée');
+  }).catch((e) => {
+    logger.warn('⚠️ [COLD START] Impossible d\'écouter app-cold-start:', e);
+  });
 }
 
 // Resume token auto-refresh if user is already logged in

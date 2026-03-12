@@ -603,6 +603,15 @@ fn main() {
                 println!("[DOCK] Handler applicationShouldHandleReopen installé");
             }
 
+            // ========================================
+            // COLD START : signaler au frontend de vider la session
+            // Émis une seule fois au démarrage de l'app (pas au rechargement de page)
+            // ========================================
+            if let Some(window) = app.get_window("main") {
+                let _ = window.emit("app-cold-start", ());
+                println!("[STARTUP] ✅ Événement app-cold-start émis → session frontend vidée");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

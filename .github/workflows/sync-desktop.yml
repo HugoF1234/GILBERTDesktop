@@ -1,0 +1,47 @@
+name: Sync main to desktop
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Permet de déclencher manuellement depuis GitHub
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Nécessaire pour les merges
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+      - name: Checkout desktop branch
+        run: git checkout desktop
+
+      - name: Merge main into desktop
+        run: |
+          # Merger main dans desktop
+          git merge origin/main --no-edit || true
+          
+          # Si conflit, garder la version desktop pour les fichiers spécifiques
+          git checkout --ours desktop/ 2>/dev/null || true
+          git checkout --ours frontend/src/App.tsx 2>/dev/null || true
+          
+          # Ajouter tous les changements
+          git add .
+          
+          # Commit si nécessaire
+          if ! git diff --staged --quiet || ! git diff --check > /dev/null 2>&1; then
+            git commit -m "Auto-sync: Merge main into desktop [skip ci]" || true
+          fi
+
+      - name: Push to desktop branch
+        run: |
+          git push origin desktop || echo "Nothing to push"
+

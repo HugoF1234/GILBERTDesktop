@@ -135,6 +135,8 @@ export function ImmersiveRecordingPage(): JSX.Element {
     return recordingManager.getCurrentDuration();
   });
   const [audioLevel, setAudioLevel] = useState(0);
+  const [systemAudioLevel, setSystemAudioLevel] = useState(0);
+  const [systemAudioActive, setSystemAudioActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [isUploading, setIsUploading] = useState(false); // État local pour l'UI
@@ -603,7 +605,10 @@ export function ImmersiveRecordingPage(): JSX.Element {
         // Polling des niveaux audio pour la visualisation des barres
         tauriRecordingService.startAudioLevelPolling({
           onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
-          onSystemLevel: () => {}, // niveau système disponible si besoin futur
+          onSystemLevel: (level) => {
+            setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
+            setSystemAudioActive(level > 0.01);
+          },
         });
 
         // Stocker le timestamp de démarrage dans le store pour survivre à la navigation
@@ -707,7 +712,10 @@ export function ImmersiveRecordingPage(): JSX.Element {
       // Reprendre le polling des niveaux audio
       tauriRecordingService.startAudioLevelPolling({
         onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
-        onSystemLevel: () => {},
+        onSystemLevel: (level) => {
+          setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
+          setSystemAudioActive(level > 0.01);
+        },
       });
       // Reprendre le timer (approximation basée sur la durée actuelle)
       const pausedDuration = duration;
@@ -1320,6 +1328,65 @@ export function ImmersiveRecordingPage(): JSX.Element {
                   maxHeight={100}
                 />
               </div>
+
+              {/* Indicateur son système (Tauri uniquement) */}
+              {isTauriApp() && (
+                <div className="flex items-center justify-center gap-2 mb-4 -mt-2">
+                  <div
+                    className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300"
+                    style={{
+                      backgroundColor: isActive && systemAudioActive
+                        ? 'rgba(16, 185, 129, 0.10)'
+                        : 'rgba(148, 163, 184, 0.08)',
+                      border: `1px solid ${isActive && systemAudioActive ? 'rgba(16, 185, 129, 0.35)' : 'rgba(148, 163, 184, 0.20)'}`,
+                    }}
+                  >
+                    {/* Point indicateur */}
+                    <div
+                      className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300"
+                      style={{
+                        backgroundColor: isActive && systemAudioActive
+                          ? '#10b981'
+                          : state === 'idle' ? '#94a3b8' : '#f59e0b',
+                        boxShadow: isActive && systemAudioActive
+                          ? '0 0 6px rgba(16, 185, 129, 0.6)'
+                          : 'none',
+                        animation: isActive && systemAudioActive ? 'pulse 1.5s infinite' : 'none',
+                      }}
+                    />
+                    {/* Barre de niveau système (mini VU-mètre) */}
+                    {isActive && (
+                      <div className="flex items-center gap-px">
+                        {Array.from({ length: 8 }).map((_, i) => (
+                          <div
+                            key={i}
+                            className="w-0.5 rounded-full transition-all duration-75"
+                            style={{
+                              height: `${6 + i * 1.5}px`,
+                              backgroundColor: systemAudioLevel * 8 > i
+                                ? (i < 5 ? '#10b981' : i < 7 ? '#f59e0b' : '#ef4444')
+                                : 'rgba(148, 163, 184, 0.25)',
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {/* Label */}
+                    <span
+                      className="transition-colors duration-300"
+                      style={{
+                        color: isActive && systemAudioActive ? '#10b981' : '#94a3b8',
+                      }}
+                    >
+                      {isActive
+                        ? systemAudioActive
+                          ? 'Son système actif'
+                          : 'Son système silencieux'
+                        : 'Son système'}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Timer - plus grand sur mobile */}
               <div className="text-center mb-6 sm:mb-5">

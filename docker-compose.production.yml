@@ -1,0 +1,243 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: gilbert-postgres
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1.2G
+        reservations:
+          memory: 800M
+    environment:
+      POSTGRES_DB: gilbert_db
+      POSTGRES_USER: gilbert_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gilbert_secure_password_2025}
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gilbert_user -d gilbert_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gilbert-network
+
+  # Cache Redis
+  redis:
+    image: redis:7-alpine
+    container_name: gilbert-redis
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 150M
+        reservations:
+          memory: 100M
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gilbert-network
+
+  # API Backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gilbert-api
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+        reservations:
+          memory: 1G
+    env_file:
+      - .env
+    environment:
+      # Configuration de base
+      ENVIRONMENT: production
+      API_V1_STR: /api/v1
+      DEBUG: "false"
+      
+      # Base de données PostgreSQL
+      DATABASE_URL: postgresql://gilbert_user:${POSTGRES_PASSWORD:-gilbert_secure_password_2025}@postgres:5432/gilbert_db
+      DB_POOL_SIZE: 8
+      DB_POOL_TIMEOUT: 15
+      
+      # Cache Redis
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_CACHE: "true"
+      CACHE_TTL: 300
+      
+      # Sécurité
+      JWT_SECRET: ${JWT_SECRET:-gilbert_jwt_super_secret_key_2025_very_long_string}
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 525600
+      
+      # Services externes
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
+      
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: https://gilbert-assistant.ovh/auth/google/callback
+      
+      # Stripe (paiements)
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRODUCT_ID_GILBERT_PLUS: ${STRIPE_PRODUCT_ID_GILBERT_PLUS:-}
+      STRIPE_PRICE_ID_GILBERT_PLUS: ${STRIPE_PRICE_ID_GILBERT_PLUS:-}
+      FRONTEND_URL: https://gilbert-assistant.ovh
+      
+      # Configuration des uploads
+      MAX_UPLOAD_SIZE: 100000000
+      UPLOADS_DIR: /app/uploads
+      
+      # Logging
+      LOG_LEVEL: INFO
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gilbert-network
+
+  # Celery Worker pour le traitement asynchrone
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gilbert-celery-worker
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    command: celery -A app.services.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      # Configuration de base
+      ENVIRONMENT: production
+      
+      # Base de données PostgreSQL
+      DATABASE_URL: postgresql://gilbert_user:${POSTGRES_PASSWORD:-gilbert_secure_password_2025}@postgres:5432/gilbert_db
+      
+      # Cache Redis
+      REDIS_URL: redis://redis:6379/0
+      
+      # Services externes
+      ASSEMBLYAI_API_KEY: ${ASSEMBLYAI_API_KEY}
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY}
+      
+      # Configuration des uploads
+      UPLOADS_DIR: /app/uploads
+      
+      # Logging
+      LOG_LEVEL: INFO
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - gilbert-network
+
+  # Frontend React
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: https://gilbert-assistant.ovh
+    container_name: gilbert-frontend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - gilbert-network
+
+  # Reverse Proxy Nginx
+  nginx:
+    image: nginx:alpine
+    container_name: gilbert-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx-simple.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - certbot_webroot:/var/www/certbot:ro
+      - certbot_ssl:/etc/letsencrypt:ro
+      - uploads_data:/app/uploads:ro
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - gilbert-network
+
+  # Certbot pour SSL
+  certbot:
+    image: certbot/certbot:latest
+    container_name: gilbert-certbot
+    volumes:
+      - certbot_webroot:/var/www/certbot
+      - certbot_ssl:/etc/letsencrypt
+    command: echo "Certbot container ready for SSL certificate generation"
+    networks:
+      - gilbert-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  uploads_data:
+    driver: local
+  certbot_webroot:
+    driver: local
+  certbot_ssl:
+    driver: local
+
+networks:
+  gilbert-network:
+    driver: bridge
