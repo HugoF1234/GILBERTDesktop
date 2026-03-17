@@ -218,8 +218,9 @@ jobs:
           if grep -q "status: Accepted" /tmp/notary_dmg_result.txt; then
             xcrun stapler staple "$DMG"
             echo "✅ DMG notarisé et staplé"
-            # Vérification finale Gatekeeper
-            spctl -a -vvv -t open "$DMG" 2>&1 | grep -E "accepted|rejected|source" || true
+            # stapler validate = vérification fiable. spctl -t open peut retourner
+            # "Insufficient Context" pour les DMG (comportement connu, pas une erreur)
+            xcrun stapler validate "$DMG" && echo "✅ DMG staple validé"
           else
             echo "❌ Notarisation DMG échouée — ne pas publier un DMG non notarisé (message « suspect » pour l'utilisateur)"
             cat /tmp/notary_dmg_result.txt
