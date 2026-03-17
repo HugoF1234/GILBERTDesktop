@@ -160,6 +160,18 @@ impl QueueManager {
         self.persist()
     }
 
+    /// Supprime les jobs dont le fichier n'existe plus (fichier supprimé manuellement, etc.)
+    pub fn purge_invalid_jobs(&mut self) -> Result<usize, QueueError> {
+        let before = self.store.jobs.len();
+        self.store.jobs.retain(|j| Path::new(&j.file_path).exists());
+        let removed = before - self.store.jobs.len();
+        if removed > 0 {
+            println!("[QUEUE] Purge de {} job(s) invalide(s) (fichier manquant)", removed);
+            self.persist()?;
+        }
+        Ok(removed)
+    }
+
     /// Delete a specific job by ID
     pub fn delete_job(&mut self, job_id: &str) -> Result<Option<QueueJob>, QueueError> {
         let idx = self.store.jobs.iter().position(|j| j.id == job_id);

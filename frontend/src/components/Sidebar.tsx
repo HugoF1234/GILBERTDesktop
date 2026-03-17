@@ -7,11 +7,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { User } from '../services/authService';
-import { getUserProfile, getDiscoveryStatus, DiscoveryStatus } from '../services/profileService';
+import { getUserProfile, getCachedProfile, getDiscoveryStatus, DiscoveryStatus } from '../services/profileService';
 import sounds from '../utils/soundDesign';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Progress } from '@/components/ui/progress';
-import { Zap } from 'lucide-react';
+import { Zap, WifiOff } from 'lucide-react';
 import { VIEW_TO_PATH, getViewFromPath } from '../types/router';
 import type { ViewType } from '../types/router';
 import { useRecordingStore } from '../stores/recordingStore';
@@ -54,7 +53,6 @@ interface SidebarProps {
   open?: boolean;
   onToggle?: () => void;
   isRecording?: boolean;
-  pendingRecordingsCount?: number;
 }
 
 // ============================================================================
@@ -106,7 +104,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   open = true,
   onToggle,
   isRecording = false,
-  pendingRecordingsCount = 0,
 }) => {
   // React Router hooks
   const navigate = useNavigate();
@@ -136,6 +133,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [userProfile, setUserProfile] = useState<ProfileData | null>(null);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   // État du dialog de sauvegarde depuis le store
   const showSaveDialog = useRecordingStore((state: any) => state.showSaveDialog);
 
@@ -150,12 +148,16 @@ const Sidebar: React.FC<SidebarProps> = ({
   const lastUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    // Ne charger le profil que si l'ID utilisateur change vraiment (pas juste la référence)
     const currentUserId = user?.id || null;
     
     if (currentUserId && currentUserId !== lastUserIdRef.current) {
-      // Nouvel utilisateur, charger le profil
       lastUserIdRef.current = currentUserId;
+      // Charger immédiatement le cache pour éviter le flash "U" (offline ou latence)
+      const cached = getCachedProfile();
+      if (cached && cached.id === currentUserId) {
+        setUserProfile(cached);
+        setCachedProfilePicture(cached.profile_picture_url ?? undefined);
+      }
       fetchUserProfile();
     } else if (!currentUserId && lastUserIdRef.current) {
       // Déconnexion
@@ -190,6 +192,19 @@ const Sidebar: React.FC<SidebarProps> = ({
       setIsCollapsed(false); // Reset to expanded for drawer
     }
   }, [useDrawerMode]);
+
+  // Indicateur hors ligne (navigator.onLine + événements online/offline)
+  useEffect(() => {
+    setIsOffline(!navigator.onLine);
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Fetch Discovery status for the gauge
   useEffect(() => {
@@ -244,18 +259,22 @@ const Sidebar: React.FC<SidebarProps> = ({
       });
     } catch (error) {
       logger.error('Échec du chargement du profil:', error);
-      // Seulement mettre à jour si on n'a pas déjà un profil en cache
-      // Cela évite de perdre l'image pendant la navigation
-      if (user && !userProfile) {
+      // Offline ou erreur réseau : utiliser le cache pour garder nom + photo visibles
+      const cached = getCachedProfile();
+      if (cached && user && cached.id === user.id) {
+        setUserProfile({
+          ...cached,
+          profile_picture_url: cached.profile_picture_url || cachedProfilePicture || null,
+        });
+      } else if (user && !userProfile) {
         setUserProfile({
           id: user.id,
           email: user.username,
           full_name: user.name || '',
-          profile_picture_url: cachedProfilePicture || null, // Garder l'image en cache si disponible
+          profile_picture_url: cachedProfilePicture || null,
           created_at: new Date().toISOString(),
         });
       }
-      // Si on a déjà un profil, ne rien faire pour garder l'image
     }
   };
 
@@ -453,8 +472,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   }> = ({ item, isActive }) => {
     const { Icon } = item;
     const isRecordingItem = item.id === 'dashboard' && isRecording;
-    const hasPendingRecovery = item.id === 'dashboard' && pendingRecordingsCount > 0 && !isRecording;
-
     // Map item id to tour target
     const getTourTarget = () => {
       switch (item.id) {
@@ -494,15 +511,6 @@ const Sidebar: React.FC<SidebarProps> = ({
               className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 animate-pulse"
               style={{ boxShadow: '0 0 8px rgba(239, 68, 68, 0.6)' }}
             />
-          )}
-          {/* Pending recovery badge */}
-          {hasPendingRecovery && (
-            <span
-              className="absolute -top-1 -right-1 min-w-[16px] h-4 px-0.5 rounded-full bg-orange-500 text-white text-[10px] font-bold flex items-center justify-center"
-              style={{ boxShadow: '0 0 6px rgba(249, 115, 22, 0.5)' }}
-            >
-              {pendingRecordingsCount}
-            </span>
           )}
         </div>
 
@@ -645,6 +653,34 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
+      {/* Indicateur hors ligne (compact, intégré à la sidebar) */}
+      <AnimatePresence>
+        {isOffline && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className={cn('overflow-hidden', isCollapsed ? 'mx-2 mb-2' : 'mx-3 mb-2')}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className={cn(
+                  'flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium',
+                  isCollapsed ? 'justify-center p-2' : 'px-3 py-2'
+                )}>
+                  <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
+                  {!isCollapsed && <span>Pas de connexion</span>}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="bg-white text-amber-800 border-amber-200">
+                Pas de connexion
+              </TooltipContent>
+            </Tooltip>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Divider */}
       <div className="mx-4 border-t border-gray-100" />
 
@@ -711,7 +747,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       {!isCollapsed && (
         <div className="flex-shrink-0 border-t border-gray-100 p-4 text-center">
           <p className="text-[10px] text-gray-400">Propulsé par Lexia France</p>
-          <p className="text-[9px] text-gray-300 mt-0.5">Version 1.1.2</p>
+          <p className="text-[9px] text-gray-300 mt-0.5">Version 1.3.1 Desktop</p>
         </div>
       )}
 

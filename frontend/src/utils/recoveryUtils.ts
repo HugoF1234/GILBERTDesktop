@@ -7,6 +7,8 @@ import { recordingStorage } from '@/services/recordingStorage';
 import { getAllMeetings } from '@/services/meetingService';
 import type { Meeting } from '@/services/meetingService';
 import { logger } from '@/utils/logger';
+import { isTauriApp, tauriListJobs } from '@/services/tauriRecordingService';
+import type { TauriJob } from '@/services/tauriRecordingService';
 
 function isSameDay(d1: Date, d2: Date): boolean {
   return (
@@ -51,5 +53,20 @@ export async function getPendingRecordingsForRecovery(): Promise<any[]> {
   } catch (error) {
     logger.warn('Impossible de vérifier les meetings (offline?), affichage de tous les pendants:', error);
     return recordings;
+  }
+}
+
+/**
+ * Retourne les jobs Tauri en attente (Pending ou Failed).
+ * Utilisé par l'overlay Récupérer en mode desktop.
+ */
+export async function getPendingTauriJobs(): Promise<TauriJob[]> {
+  if (!isTauriApp()) return [];
+  try {
+    const jobs = await tauriListJobs();
+    return jobs.filter((j) => j.status === 'pending' || j.status === 'failed');
+  } catch (error) {
+    logger.warn('Erreur récupération jobs Tauri:', error);
+    return [];
   }
 }

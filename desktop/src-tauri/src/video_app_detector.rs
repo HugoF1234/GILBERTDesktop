@@ -8,7 +8,6 @@ pub struct VideoAppDetector {
     pub app_identifier: String,
     pub app_handle: Arc<parking_lot::Mutex<Option<tauri::AppHandle>>>,
     last_notification: Arc<std::sync::atomic::AtomicU64>,
-    last_mic_notification: Arc<std::sync::atomic::AtomicU64>,
     is_recording: Arc<std::sync::atomic::AtomicBool>,
     startup_time: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -23,7 +22,6 @@ impl VideoAppDetector {
             app_identifier,
             app_handle: Arc::new(parking_lot::Mutex::new(None)),
             last_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            last_mic_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             is_recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             startup_time: Arc::new(std::sync::atomic::AtomicU64::new(now)),
         }
@@ -42,7 +40,6 @@ impl VideoAppDetector {
             app_identifier,
             app_handle,
             last_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            last_mic_notification: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             is_recording,
             startup_time: Arc::new(std::sync::atomic::AtomicU64::new(now)),
         }
@@ -65,102 +62,419 @@ impl VideoAppDetector {
         *self.app_handle.lock() = Some(app_handle);
     }
 
-    /// Liste des apps de visio connues
-    const VIDEO_APPS: &'static [(&'static str, &'static str)] = &[
-        ("discord", "Discord"),
-        ("zoom.us", "Zoom"),
-        ("zoom", "Zoom"),
-        ("teams", "Microsoft Teams"),
-        ("slack", "Slack"),
-        ("webex", "Webex"),
-        ("facetime", "FaceTime"),
-        ("skype", "Skype"),
-        ("meet.google", "Google Meet"),
-        ("whereby", "Whereby"),
-        ("around", "Around"),
-        ("loom", "Loom"),
-        ("riverside", "Riverside"),
-    ];
+    /// Détecte si un CALL ACTIF est en cours (pas juste si l'app est ouverte).
+    ///
+    /// Stratégie multi-couches adaptée à chaque app :
+    ///  1. Teams v2 : TCP ESTABLISHED (>= 4 connexions) vers serveurs Microsoft
+    ///  2. Zoom : UDP non-*: sur ports > 1024 (flux RTP)
+    ///  3. Discord/Slack/Webex : UDP avec IP distante ou TCP > seuil
+    ///  4. URL navigateur : Google Meet, Jitsi, Zoom web, Teams web
+    ///
+    /// ⚠️ "App ouverte" ≠ "call en cours" :
+    ///    Teams idle = 1-2 connexions TCP ESTABLISHED (heartbeat)
+    ///    Teams en call = 4+ connexions TCP ESTABLISHED (média, signalisation, ICE)
+    fn get_running_video_app() -> Option<String> {
+        #[cfg(target_os = "macos")]
+        {
+            // Méthode 1 : URL navigateur (priorité) — plus fiable que le réseau
+            // (évite "Teams" alors qu'on est sur Meet : l'URL indique la vraie app)
+            if let Some(result) = Self::get_browser_active_call() {
+                return Some(result);
+            }
 
-    /// Détecte quelle app utilise le micro en ce moment (macOS uniquement)
-    /// Utilise plusieurs méthodes complémentaires
+            // Méthode 2 : Connexions réseau (apps natives, fallback navigateur)
+            if let Some(result) = Self::get_active_call_via_network() {
+                return Some(result);
+            }
+        }
+
+        None
+    }
+
+    /// Détecte les calls actifs.
+    ///
+    /// Méthode A : micro CoreAudio actif (is_microphone_active) + identification du process
+    ///   → Apps natives : pgrep sur les apps de visio connues
+    ///   → Navigateurs  : micro actif + connexions TCP vers domaines visio
+    ///
+    /// Méthode B (fallback, micro coupé) :
+    ///
+    /// Méthode A : micro CoreAudio actif (is_microphone_active) + identification du process
+    ///   → Apps natives : pgrep + lsof -c ciblé (rapide, ~30ms par app)
+    ///   → Navigateurs  : lsof -c ciblé sur les renderer processes
+    ///
+    /// Méthode B (toujours exécutée, micro coupé ou app gérant son propre audio) :
+    ///   → Teams : lsof -c MSTeams TCP ESTABLISHED ≥ 4
+    ///   → Zoom  : lsof -c zoom.us UDP
+    ///   → Discord : lsof -c Discord UDP
+    ///
+    /// NOTE: On n'utilise PLUS lsof -i TCP global (trop lent, ~5s).
+    ///       On utilise lsof -c <processname> ciblé (~30ms).
     #[cfg(target_os = "macos")]
-    fn get_app_using_mic() -> Option<String> {
-        // Méthode 1 : surveiller le privacy indicator via IOKit
-        // Sur macOS 12+, l'indicateur orange du micro correspond à une entrée dans IOKit
-        let out1 = Command::new("sh")
-            .arg("-c")
-            .arg(r#"
-                ioreg -l 2>/dev/null | grep -i "IsCapturing\|MicCapturing\|AudioCapturing" | grep -v "^$" | head -3
-            "#)
-            .output()
-            .ok();
-        if let Some(o) = out1 {
-            let s = String::from_utf8_lossy(&o.stdout);
-            if s.contains("1") && s.contains("Capturing") {
-                // Micro actif — trouver l'app via lsof sur coreaudiod connections
-                if let Some(app) = Self::get_app_via_lsof() {
-                    return Some(app);
+    fn get_active_call_via_network() -> Option<String> {
+        // Helper : lsof ciblé sur un nom de process, compter les lignes matchant un pattern
+        fn lsof_count(proc_name: &str, proto: &str, extra_grep: &str) -> i32 {
+            let grep_part = if extra_grep.is_empty() {
+                String::new()
+            } else {
+                format!("| grep -cE '{}' || echo 0", extra_grep)
+            };
+            let cmd = if grep_part.is_empty() {
+                format!("lsof -c '{}' -a -i {} -nP 2>/dev/null | grep -c {} || echo 0",
+                    proc_name, proto, proto)
+            } else {
+                format!("lsof -c '{}' -a -i {} -nP 2>/dev/null {}",
+                    proc_name, proto, grep_part)
+            };
+            Command::new("sh").arg("-c").arg(&cmd)
+                .output().ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().unwrap_or(0))
+                .unwrap_or(0)
+        }
+
+        // ── Méthode A : micro CoreAudio actif → apps natives ────────────────
+        {
+            extern "C" { fn is_microphone_active() -> bool; }
+            let mic_active = unsafe { is_microphone_active() };
+            println!("[DETECTION] Micro actif (CoreAudio): {}", mic_active);
+
+            if mic_active {
+                // Apps natives : si le micro CoreAudio est actif ET le process tourne = call
+                let native_apps: &[(&str, &str)] = &[
+                    ("zoom.us",    "Zoom"),
+                    ("CptHost",    "Zoom"),
+                    ("MSTeams",    "Microsoft Teams"),
+                    ("Microsoft Teams", "Microsoft Teams"),
+                    ("discord",    "Discord"),
+                    ("webex",      "Webex"),
+                    ("facetime",   "FaceTime"),
+                    ("skype",      "Skype"),
+                    ("slack",      "Slack"),
+                    ("whereby",    "Whereby"),
+                ];
+                for (pattern, name) in native_apps {
+                    let out = Command::new("pgrep").args(["-ix", pattern]).output().ok();
+                    if let Some(o) = out {
+                        let pid = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                        if !pid.is_empty() {
+                            println!("[DETECTION] ✅ {} (micro CoreAudio actif + process)", name);
+                            return Some(name.to_string());
+                        }
+                    }
                 }
             }
         }
 
-        // Méthode 2 : détecter via lsof les processus connectés à coreaudiod
-        Self::get_app_via_lsof()
+        // ── Méthode B : lsof ciblé par process (rapide ~30ms, indépendant du micro) ──
+        // Teams peut gérer son propre audio sans passer par CoreAudio hardware
+
+        // Teams — TCP ESTABLISHED ≥ 4 (idle = 1-2, call = 4-10)
+        // MSTeams = ancienne app, "Microsoft Teams" = nouvelle app (Teams 2.0)
+        {
+            let n_msteams = lsof_count("MSTeams", "TCP", "ESTABLISHED");
+            let n_teams = lsof_count("Microsoft Teams", "TCP", "ESTABLISHED");
+            let n = n_msteams.max(n_teams);
+            println!("[DETECTION] Teams TCP ESTABLISHED: MSTeams={}, Microsoft Teams={}", n_msteams, n_teams);
+            if n >= 4 {
+                return Some("Microsoft Teams".to_string());
+            }
+        }
+
+        // Zoom — UDP hors mDNS/SSDP (flux RTP)
+        {
+            let running = Command::new("pgrep").args(["-ix", "zoom.us"]).output()
+                .ok().map(|o| !o.stdout.is_empty()).unwrap_or(false);
+            if running {
+                let udp = lsof_count("zoom.us", "UDP", "");
+                let udp2 = lsof_count("CptHost", "UDP", "");
+                println!("[DETECTION] Zoom UDP: {} + CptHost UDP: {}", udp, udp2);
+                if udp > 0 || udp2 > 0 {
+                    return Some("Zoom".to_string());
+                }
+                let tcp = lsof_count("zoom.us", "TCP", "ESTABLISHED");
+                if tcp >= 4 { return Some("Zoom".to_string()); }
+            }
+        }
+
+        // Discord — UDP vocal
+        {
+            let n = lsof_count("Discord", "UDP", "");
+            if n > 0 {
+                println!("[DETECTION] Discord UDP: {}", n);
+                return Some("Discord".to_string());
+            }
+        }
+
+        // ── Méthode C : Navigateurs — WebRTC UDP actif ───────────────────────
+        // Google Meet et autres services web utilisent WebRTC qui ouvre des sockets UDP.
+        // On détecte via lsof -c ciblé sur les renderer processes des navigateurs.
+        {
+            // (nom_process, nom_affiché_pour_logs)
+            let browser_procs: &[&str] = &[
+                "Google Chrome Helper (Renderer)",
+                "Google Chrome Helper",
+                "Arc Helper (Renderer)",
+                "Arc Helper",
+                "Brave Browser Helper (Renderer)",
+                "Brave Browser Helper",
+                "Firefox",
+                "Safari",
+            ];
+
+            for browser_proc in browser_procs {
+                // UDP filtré : exclure mDNS (5353), SSDP (1900), NetBIOS (137)
+                let udp_count = {
+                    let cmd = format!(
+                        "lsof -c '{}' -a -i UDP -nP 2>/dev/null | grep -vE ':5353|:1900|:137|\\*:' | grep -c UDP || echo 0",
+                        browser_proc
+                    );
+                    Command::new("sh").arg("-c").arg(&cmd)
+                        .output().ok()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().unwrap_or(0))
+                        .unwrap_or(0)
+                };
+
+                println!("[DETECTION-BROWSER] {} — UDP WebRTC: {}", browser_proc, udp_count);
+
+                // ≥ 2 sockets UDP = WebRTC actif (audio + vidéo ou audio seul)
+                if udp_count >= 2 {
+                    // Identifier le service par les ports caractéristiques
+                    let meet_name = {
+                        // Google Meet STUN : ports 19302-19312
+                        let is_gmeet = {
+                            let cmd = format!(
+                                "lsof -c '{}' -a -i UDP -nP 2>/dev/null | grep -cE ':1930[2-9]|:1931[0-2]' || echo 0",
+                                browser_proc
+                            );
+                            Command::new("sh").arg("-c").arg(&cmd)
+                                .output().ok()
+                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().unwrap_or(0))
+                                .unwrap_or(0)
+                        };
+                        // Zoom web : ports 8801-8802
+                        let is_zoom = {
+                            let cmd = format!(
+                                "lsof -c '{}' -a -i UDP -nP 2>/dev/null | grep -cE ':880[12]' || echo 0",
+                                browser_proc
+                            );
+                            Command::new("sh").arg("-c").arg(&cmd)
+                                .output().ok()
+                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().unwrap_or(0))
+                                .unwrap_or(0)
+                        };
+                        // Teams web : TCP vers *.teams.microsoft.com sur port 443 en ESTABLISHED
+                        let is_teams_web = {
+                            let cmd = format!(
+                                "lsof -c '{}' -a -i TCP -nP 2>/dev/null | grep -cE 'ESTABLISHED.*:443|:443.*ESTABLISHED' || echo 0",
+                                browser_proc
+                            );
+                            Command::new("sh").arg("-c").arg(&cmd)
+                                .output().ok()
+                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i32>().unwrap_or(0))
+                                .unwrap_or(0)
+                        };
+
+                        if is_gmeet > 0 { "Google Meet" }
+                        else if is_zoom > 0 { "Zoom" }
+                        else if is_teams_web >= 2 { "Microsoft Teams" }
+                        else { "Réunion web" }
+                    };
+
+                    println!("[DETECTION] ✅ {} (browser WebRTC UDP actif)", meet_name);
+                    return Some(meet_name.to_string());
+                }
+            }
+        }
+
+        None
     }
 
+    /// Trouve quelle app de visio est actuellement ouverte (dans l'ordre de priorité).
+    /// Méthode de détection AppleScript fenêtres (gardée comme fallback annexe).
     #[cfg(target_os = "macos")]
-    fn get_app_via_lsof() -> Option<String> {
-        // Chercher les processus qui ont des connexions audio actives
-        // via les sockets unix de coreaudiod
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(r#"
-                lsof 2>/dev/null | grep -iE "coreaudio|avfoundation|audio" \
-                  | grep -v "dylib\|framework\|\.so\|grep\|Gilbert\|lsof\|loginwindow\|WindowServer\|Dock\|Finder\|kernel\|launchd" \
-                  | awk '{print $1}' | sort | uniq -c | sort -rn | head -5 \
-                  | awk '{print $2}'
-            "#)
+    #[allow(dead_code)]
+    fn detect_call_via_applescript_windows() -> Option<String> {
+        let script = r#"
+            set callApps to {{"Microsoft Teams", "msteams"}, {"Zoom", "zoom.us"}, {"Discord", "Discord"}, {"Webex", "Webex Meetings"}, {"FaceTime", "FaceTime"}, {"Skype", "Skype"}}
+
+            repeat with appInfo in callApps
+                set appName to item 1 of appInfo
+                try
+                    tell application "System Events"
+                        if exists process appName then
+                            tell process appName
+                                set winCount to count of windows
+                                if winCount > 0 then
+                                    if appName is "Microsoft Teams" then
+                                        repeat with w in windows
+                                            try
+                                                set winTitle to name of w
+                                                set winTitle to do shell script "echo " & quoted form of winTitle & " | tr '[:upper:]' '[:lower:]'"
+                                                if winTitle contains "meeting" or winTitle contains "réunion" or winTitle contains "appel" or winTitle contains "call" or winTitle contains "join" then
+                                                    return "Microsoft Teams"
+                                                end if
+                                            end try
+                                        end repeat
+                                    end if
+                                    if appName is "Zoom" then
+                                        repeat with w in windows
+                                            try
+                                                set winTitle to name of w
+                                                set winTitle to do shell script "echo " & quoted form of winTitle & " | tr '[:upper:]' '[:lower:]'"
+                                                if winTitle contains "zoom meeting" or winTitle contains "zoom webinar" then
+                                                    return "Zoom"
+                                                end if
+                                            end try
+                                        end repeat
+                                    end if
+                                end if
+                            end tell
+                        end if
+                    end tell
+                end try
+            end repeat
+            return ""
+        "#;
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
             .output()
             .ok()?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let blacklist = ["lsof", "sh", "awk", "grep", "sort", "uniq",
-                        "Gilbert", "loginwindow", "WindowServer", "Dock",
-                        "Finder", "kernel", "launchd", "coreaudiod", ""];
-
-        stdout.lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .filter(|l| !blacklist.contains(l))
-            .next()
-            .map(|s| s.to_string())
+        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if result.is_empty() || result == "\"\"" {
+            return None;
+        }
+        println!("[APPLESCRIPT WINDOWS] Call détecté: {}", result);
+        Some(result)
     }
 
-    #[cfg(not(target_os = "macos"))]
-    fn get_app_using_mic() -> Option<String> {
-        None
-    }
+    /// Détecte les calls via lsof ciblé sur les PIDs des apps de visio connues.
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
+    fn detect_call_via_pid_lsof() -> Option<String> {
+        let apps: &[(&str, &str)] = &[
+            ("msteams",    "Microsoft Teams"),
+            ("teams",      "Microsoft Teams"),
+            ("zoom.us",    "Zoom"),
+            ("CptHost",    "Zoom"),
+            ("discord",    "Discord"),
+            ("webex",      "Webex"),
+            ("facetime",   "FaceTime"),
+            ("skype",      "Skype"),
+        ];
 
-    #[cfg(not(target_os = "macos"))]
-    fn get_app_via_lsof() -> Option<String> {
-        None
-    }
+        for (pattern, name) in apps {
+            let pgrep = Command::new("sh")
+                .arg("-c")
+                .arg(format!("pgrep -i {} 2>/dev/null | head -1", pattern))
+                .output()
+                .ok()?;
 
-    /// Vérifie si une app de visio est en cours d'exécution
-    fn get_running_video_app() -> Option<String> {
-        let output = Command::new("ps")
-            .args(["aux"])
-            .output()
-            .ok()?;
+            let pid_str = String::from_utf8_lossy(&pgrep.stdout).trim().to_string();
+            if pid_str.is_empty() {
+                continue;
+            }
 
-        let ps_str = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            let lsof_check = Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "lsof -p {} -i UDP -nP 2>/dev/null | grep -v '\\*:' | grep -v ':443 ' | wc -l",
+                    pid_str
+                ))
+                .output()
+                .ok()?;
 
-        for (pattern, name) in Self::VIDEO_APPS {
-            if ps_str.contains(pattern) {
+            let count: i32 = String::from_utf8_lossy(&lsof_check.stdout)
+                .trim()
+                .parse()
+                .unwrap_or(0);
+
+            if count > 0 {
+                println!("[PID LSOF] Call actif détecté: {} (pid={}, {} connexions UDP)", name, pid_str, count);
                 return Some(name.to_string());
             }
         }
+
+        None
+    }
+
+    /// Détection via URL active du navigateur (Chrome, Safari, Arc, etc.)
+    /// Complète la détection réseau pour Teams web et Google Meet.
+    #[cfg(target_os = "macos")]
+    fn get_browser_active_call() -> Option<String> {
+        let script = r#"
+            set result to ""
+            try
+                tell application "Google Chrome" to set result to URL of active tab of front window
+            end try
+            if result is "" then
+                try
+                    tell application "Safari" to set result to URL of current tab of front window
+                end try
+            end if
+            if result is "" then
+                try
+                    tell application "Arc" to set result to URL of active tab of front window
+                end try
+            end if
+            if result is "" then
+                try
+                    tell application "Brave Browser" to set result to URL of active tab of front window
+                end try
+            end if
+            return result
+        "#;
+        let out = Command::new("osascript").arg("-e").arg(script).output().ok()?;
+        let url = String::from_utf8_lossy(&out.stdout).to_lowercase();
+        let url = url.trim();
+
+        // Google Meet : meet.google.com/xxx-xxx-xxx ou meet.google.com/call/xxx
+        if url.contains("meet.google.com") {
+            if url.contains("meet.google.com/call/") {
+                return Some("Google Meet".to_string());
+            }
+            if let Some(path) = url.split("meet.google.com/").nth(1) {
+                let path = path.split('?').next().unwrap_or(path);
+                if path.len() >= 8 && path.contains('-') && !path.starts_with("new") {
+                    return Some("Google Meet".to_string());
+                }
+            }
+        }
+        // Teams web : teams.microsoft.com ou teams.live.com avec call/meet
+        if (url.contains("teams.microsoft.com") || url.contains("teams.live.com"))
+            && (url.contains("meetup-join") || url.contains("/meet/") || url.contains("calling")
+                || url.contains("/l/call/") || url.contains("/l/meetup-join/"))
+        {
+            return Some("Microsoft Teams".to_string());
+        }
+        // Zoom web
+        if url.contains("zoom.us/j/") || url.contains("zoom.us/wc/") {
+            return Some("Zoom".to_string());
+        }
+        // Jitsi, Whereby
+        if url.contains("meet.jit.si/") {
+            if let Some(path) = url.split("meet.jit.si/").nth(1) {
+                if path.len() > 2 { return Some("Jitsi Meet".to_string()); }
+            }
+        }
+        if url.contains("8x8.vc/") {
+            return Some("Jitsi Meet".to_string());
+        }
+        if url.contains("whereby.com/") {
+            if let Some(path) = url.split("whereby.com/").nth(1) {
+                let base = path.split('/').next().unwrap_or("");
+                if !base.is_empty() && !base.starts_with("business") && !base.starts_with("pricing") {
+                    return Some("Whereby".to_string());
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn get_browser_active_call() -> Option<String> {
         None
     }
 
@@ -240,35 +554,29 @@ impl VideoAppDetector {
     }
 
     pub async fn start_detection_loop(&self) {
-        let app_id = self.app_identifier.clone();
+        let app_id_for_timer = self.app_identifier.clone();
         let last_notif_meeting = self.last_notification.clone();
-        let last_notif_mic = self.last_mic_notification.clone();
         let is_recording = self.is_recording.clone();
         let startup_time = self.startup_time.clone();
+        let _app_handle_arc = self.app_handle.clone();
 
         // Timestamp du début de l'enregistrement actuel (pour notif 1h)
         let recording_start_ts: Arc<std::sync::atomic::AtomicU64> = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let rec_start_clone = recording_start_ts.clone();
         let is_recording_for_timer = is_recording.clone();
-        let app_id_for_timer = app_id.clone();
 
-        // ── Tâche 1 : Détection apps de visio + micro any-app ────────────────
+        // ── Tâche 1 : Détection calls visio actifs ───────────────────────────
         tauri::async_runtime::spawn(async move {
-            // Délai initial pour laisser l'app démarrer
-            sleep(Duration::from_secs(15)).await;
-            println!("✅ Détection meetings + micro démarrée");
+            sleep(Duration::from_secs(5)).await;
+            println!("✅ Détection visioconférence démarrée (polling 2s)");
 
-            // État précédent pour éviter les doublons
-            let mut prev_meeting_active = false;
-            let mut prev_mic_app: Option<String> = None;
+            // Dernière app détectée — on notifie quand ça change (nouvelle réunion ou switch Teams→Meet)
+            let mut prev_app: Option<String> = None;
 
             loop {
-                sleep(Duration::from_secs(10)).await;
+                sleep(Duration::from_secs(2)).await;
 
-                // Pas de notif si on enregistre déjà
                 if is_recording.load(std::sync::atomic::Ordering::SeqCst) {
-                    prev_meeting_active = false;
-                    prev_mic_app = None;
                     continue;
                 }
 
@@ -277,65 +585,36 @@ impl VideoAppDetector {
                     .unwrap_or_default()
                     .as_secs();
 
-                // Pas de notif dans les 15 premières secondes après le démarrage
                 let startup = startup_time.load(std::sync::atomic::Ordering::SeqCst);
-                if now.saturating_sub(startup) < 15 {
+                if now.saturating_sub(startup) < 6 {
                     continue;
                 }
 
-                // ── Cas 1 : app de visio détectée (ouverte, call ou pas) ─────
-                let video_app = Self::get_running_video_app();
+                let video_app = tokio::task::spawn_blocking(Self::get_running_video_app)
+                    .await
+                    .unwrap_or(None);
+
+                println!("[DETECTION] Cycle — résultat: {:?}", video_app);
 
                 if let Some(ref app_name) = video_app {
-                    // Notifier dès que l'app est ouverte (pas besoin d'un call actif)
+                    // Notifier si : (1) nouvelle réunion (prev=None) ou (2) changement d'app (Teams→Meet)
+                    let is_new = prev_app.is_none();
+                    let is_switch = prev_app.as_deref() != Some(app_name.as_str());
+                    let cooldown_secs = if is_switch { 15 } else { 60 };
                     let last_meeting = last_notif_meeting.load(std::sync::atomic::Ordering::SeqCst);
-                    let cooldown_ok = now.saturating_sub(last_meeting) >= 1800; // 30 min
+                    let cooldown_ok = now.saturating_sub(last_meeting) >= cooldown_secs;
 
-                    if !prev_meeting_active && cooldown_ok {
-                        println!("🎙️ App visio détectée: {}", app_name);
-                        let _ = Notification::new(&app_id)
-                            .title("Gilbert — Réunion détectée")
-                            .body(&format!("{} est ouvert — Voulez-vous enregistrer ?", app_name))
-                            .show();
+                    if (is_new || is_switch) && cooldown_ok {
+                        println!("[DETECTION] 🎙️ {} détecté: {} — envoi notification", if is_switch { "Changement" } else { "Nouvelle visio" }, app_name);
+                        let notif_app = app_name.clone();
+                        std::thread::spawn(move || {
+                            send_meeting_native_notification(&notif_app);
+                        });
                         last_notif_meeting.store(now, std::sync::atomic::Ordering::SeqCst);
                     }
-                    prev_meeting_active = true;
-                    prev_mic_app = None;
-                    continue;
-                }
-
-                // Pas de call actif → reset état réunion
-                prev_meeting_active = false;
-
-                // ── Cas 2 : micro ouvert par n'importe quelle app (hors visio) ──
-                let mic_app = Self::get_app_using_mic();
-
-                // Filtrer les apps de visio (déjà gérées au-dessus)
-                let mic_app_filtered = mic_app.as_ref().and_then(|name| {
-                    let lower = name.to_lowercase();
-                    let is_video = Self::VIDEO_APPS.iter().any(|(p, _)| lower.contains(p));
-                    // Aussi filtrer Gilbert lui-même
-                    let is_gilbert = lower.contains("gilbert");
-                    if is_video || is_gilbert { None } else { Some(name.clone()) }
-                });
-
-                if let Some(ref mic_name) = mic_app_filtered {
-                    // Notifier seulement si c'est une nouvelle app (différente de la précédente)
-                    let is_new_app = prev_mic_app.as_deref() != Some(mic_name.as_str());
-                    let last_mic = last_notif_mic.load(std::sync::atomic::Ordering::SeqCst);
-                    let cooldown_ok = now.saturating_sub(last_mic) >= 1800; // 30 min
-
-                    if is_new_app && cooldown_ok {
-                        println!("🎤 Micro actif: {}", mic_name);
-                        let _ = Notification::new(&app_id)
-                            .title("Gilbert — Micro actif")
-                            .body(&format!("{} utilise votre micro — Démarrer un enregistrement ?", mic_name))
-                            .show();
-                        last_notif_mic.store(now, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    prev_mic_app = Some(mic_name.clone());
+                    prev_app = Some(app_name.clone());
                 } else {
-                    prev_mic_app = None;
+                    prev_app = None;
                 }
             }
         });
@@ -368,12 +647,8 @@ impl VideoAppDetector {
                 if elapsed_min >= 60 && (elapsed_min - 60) % 30 == 0 {
                     println!("⏱️ Enregistrement en cours depuis {}min", elapsed_min);
                     let _ = Notification::new(&app_id_for_timer)
-                        .title("Gilbert — Enregistrement long")
-                        .body(&format!(
-                            "Vous enregistrez depuis {}h{}min — Pensez à sauvegarder !",
-                            elapsed_min / 60,
-                            elapsed_min % 60
-                        ))
+                        .title("Toujours là ?")
+                        .body("Enregistrement en cours depuis 1h — Pensez à sauvegarder.")
                         .show();
                 }
             }
@@ -385,3 +660,22 @@ impl VideoAppDetector {
         }
     }
 }
+
+/// Notification macOS interactive avec icône Gilbert — clic "Enregistrer" → mode compact + enregistrement
+/// Utilise display alert avec l'icône du bundle Gilbert pour une présentation personnalisée.
+/// Envoie une notification native macOS via UNUserNotificationCenter (non-bloquante).
+/// L'icône est celle de Gilbert.app, avec boutons "Enregistrer" / "Ignorer".
+/// La réponse est capturée par le delegate Swift → callback Rust notification_record_callback.
+#[cfg(target_os = "macos")]
+fn send_meeting_native_notification(app_name: &str) {
+    extern "C" {
+        fn send_meeting_notification(app_name: *const std::os::raw::c_char);
+    }
+    use std::ffi::CString;
+    if let Ok(cname) = CString::new(app_name) {
+        unsafe { send_meeting_notification(cname.as_ptr()); }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_meeting_native_notification(_app_name: &str) {}

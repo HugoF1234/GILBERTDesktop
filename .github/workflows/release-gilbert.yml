@@ -81,7 +81,13 @@ jobs:
           APPLE_TEAM_ID: 2U6L38DLSW
         run: |
           APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
-          DMG="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Gilbert_0.2.0_aarch64.dmg"
+          DMG_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          DMG=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
+          if [ -z "$DMG" ]; then
+            echo "❌ Aucun fichier .dmg trouvé dans $DMG_DIR"
+            exit 1
+          fi
+          echo "DMG à signer: $DMG"
           IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
           ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
@@ -182,8 +188,10 @@ jobs:
           mkdir -p "$MOUNT_DIR/.background"
           cp "$BACKGROUND" "$MOUNT_DIR/.background/background.png"
 
-          # Appliquer le fond via le fichier AppleScript du repo
-          osascript desktop/setup_dmg.applescript || true
+          # Appliquer le fond via AppleScript (optionnel si le fichier existe)
+          if [ -f desktop/setup_dmg.applescript ]; then
+            osascript desktop/setup_dmg.applescript || true
+          fi
 
           # Démonter le DMG
           sync
@@ -205,7 +213,7 @@ jobs:
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait 2>&1 | tee /tmp/notary_dmg_result.txt || true
+            --wait 2>&1 | tee /tmp/notary_dmg_result.txt
 
           if grep -q "status: Accepted" /tmp/notary_dmg_result.txt; then
             xcrun stapler staple "$DMG"
@@ -213,8 +221,9 @@ jobs:
             # Vérification finale Gatekeeper
             spctl -a -vvv -t open "$DMG" 2>&1 | grep -E "accepted|rejected|source" || true
           else
-            echo "ℹ️ Notarisation DMG échouée — log :"
+            echo "❌ Notarisation DMG échouée — ne pas publier un DMG non notarisé (message « suspect » pour l'utilisateur)"
             cat /tmp/notary_dmg_result.txt
+            exit 1
           fi
           echo "✅ Pipeline terminé"
 
@@ -283,19 +292,14 @@ jobs:
           echo "Tauri v1 requiert libwebkit2gtk-4.0 qui n'est plus compatible avec Ubuntu 22.04."
           echo "Solution : migrer vers Tauri v2 ou utiliser un runner Ubuntu 20.04 dédié."
           mkdir -p desktop/src-tauri/target/release/bundle/appimage/
-          touch desktop/src-tauri/target/release/bundle/appimage/placeholder.txt
+          # Placeholder pour que le job release puisse télécharger un artifact (évite l'échec)
+          echo "Linux build désactivé - voir release notes" > desktop/src-tauri/target/release/bundle/appimage/LINUX_DISABLED.txt
 
-      - name: Upload placeholder
+      - name: Upload Linux artifact (placeholder)
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-Linux
-          path: desktop/src-tauri/target/release/bundle/appimage/placeholder.txt
-
-      - name: Upload .AppImage
-        uses: actions/upload-artifact@v4
-        with:
-          name: Gilbert-Linux
-          path: desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          path: desktop/src-tauri/target/release/bundle/appimage/LINUX_DISABLED.txt
 
   # ─────────────────────────────────────────────────────────────
   # Créer la GitHub Release avec les 3 binaires

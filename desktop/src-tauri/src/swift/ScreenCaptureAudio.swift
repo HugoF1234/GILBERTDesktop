@@ -4,6 +4,7 @@ import ScreenCaptureKit
 import AppKit  // For NSWorkspace
 import CoreAudio  // Pour lire le sample rate natif du device de sortie (fix AirPods)
 import CoreGraphics  // Pour CGPreflightScreenCaptureAccess / CGRequestScreenCaptureAccess
+import UserNotifications  // Pour les notifications natives avec boutons d'action
 
 // MARK: - C-compatible callback types
 public typealias AudioDataCallback = @convention(c) (UnsafePointer<Float>, Int32, Int32, Int32) -> Void
@@ -17,6 +18,8 @@ private var errorCallback: ErrorCallback?
 // Permission state — évite de redemander en boucle si refusée
 private var permissionAlreadyRequested = false
 private var cachedPermissionResult: Bool? = nil
+// Flag : la capture a déjà réussi au moins une fois dans cette session → permission OK
+private var captureEverSucceeded = false
 
 // MARK: - FFI Functions
 
@@ -32,28 +35,73 @@ public func sck_is_available() -> Bool {
 public func sck_has_permission() -> Bool {
     print("[SCK-SWIFT] sck_has_permission() called")
 
-    // CGPreflightScreenCaptureAccess : vérification SILENCIEUSE qui lit TCC directement.
-    // Contrairement à SCShareableContent, ne déclenche JAMAIS de popup.
-    // Fonctionne depuis macOS 12.3+ et persiste entre les sessions.
+    // Si la capture a déjà réussi dans cette session, la permission est forcément OK
+    if captureEverSucceeded { return true }
+
+    // 1. CGPreflightScreenCaptureAccess : vérification SILENCIEUSE qui lit TCC directement.
     let granted = CGPreflightScreenCaptureAccess()
     if granted {
         cachedPermissionResult = true
+        UserDefaults.standard.set(true, forKey: "gilbert.screen_recording_granted")
         print("[SCK-SWIFT] Permission: granted via TCC ✅")
-    } else {
-        print("[SCK-SWIFT] Permission: not granted")
+        return true
     }
-    return granted
+
+    // 2. Vérifier si on a déjà accordé dans une session précédente via UserDefaults
+    //    UserDefaults persiste même si TCC retourne false (bug connu macOS)
+    if UserDefaults.standard.bool(forKey: "gilbert.screen_recording_granted") {
+        print("[SCK-SWIFT] Permission: previously granted (UserDefaults) — skip popup")
+        return true
+    }
+
+    // 3. Tenter un accès SCShareableContent silencieux pour détecter si la permission
+    //    est accordée mais CGPreflightScreenCaptureAccess() retourne un faux négatif
+    //    (bug connu sur macOS 14+ avec certains TeamIdentifier)
+    if #available(macOS 13.0, *) {
+        var silentGranted = false
+        let sema = DispatchSemaphore(value: 0)
+        Task {
+            do {
+                _ = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+                silentGranted = true
+                print("[SCK-SWIFT] Permission: granted via SCShareableContent silent check ✅")
+            } catch {
+                print("[SCK-SWIFT] Permission: SCShareableContent check failed: \(error.localizedDescription)")
+            }
+            sema.signal()
+        }
+        _ = sema.wait(timeout: .now() + 3.0)
+        if silentGranted {
+            captureEverSucceeded = true
+            UserDefaults.standard.set(true, forKey: "gilbert.screen_recording_granted")
+            return true
+        }
+    }
+
+    print("[SCK-SWIFT] Permission: not granted")
+    return false
 }
 
 @_cdecl("sck_request_permission")
 public func sck_request_permission() -> Bool {
     print("[SCK-SWIFT] sck_request_permission() called")
 
-    // Vérifier d'abord silencieusement
+    // Si la capture a déjà réussi → permission OK
+    if captureEverSucceeded { return true }
+
+    // Vérifier d'abord silencieusement via TCC
     if CGPreflightScreenCaptureAccess() {
         cachedPermissionResult = true
         permissionAlreadyRequested = true
+        UserDefaults.standard.set(true, forKey: "gilbert.screen_recording_granted")
         print("[SCK-SWIFT] Permission already granted ✅")
+        return true
+    }
+
+    // UserDefaults : accordé dans une session précédente → skip popup
+    if UserDefaults.standard.bool(forKey: "gilbert.screen_recording_granted") {
+        print("[SCK-SWIFT] Permission previously granted (UserDefaults) — skipping popup ✅")
+        permissionAlreadyRequested = true
         return true
     }
 
@@ -65,11 +113,12 @@ public func sck_request_permission() -> Bool {
     permissionAlreadyRequested = true
 
     // CGRequestScreenCaptureAccess : affiche la popup système UNE SEULE FOIS
-    // et écrit le résultat dans TCC de façon PERSISTANTE.
-    // Après acceptation, CGPreflightScreenCaptureAccess() retournera true pour toujours.
     print("[SCK-SWIFT] Requesting Screen Recording permission via CGRequestScreenCaptureAccess...")
     let granted = CGRequestScreenCaptureAccess()
     cachedPermissionResult = granted
+    if granted {
+        UserDefaults.standard.set(true, forKey: "gilbert.screen_recording_granted")
+    }
     print("[SCK-SWIFT] Permission request result: \(granted)")
     return granted
 }
@@ -78,16 +127,23 @@ public func sck_request_permission() -> Bool {
 
 @_cdecl("request_microphone_permission")
 public func request_microphone_permission() {
-    // Vérifie d'abord silencieusement
     let status = AVCaptureDevice.authorizationStatus(for: .audio)
     switch status {
     case .authorized:
+        UserDefaults.standard.set(true, forKey: "gilbert.microphone_granted")
         print("[PERMISSIONS] Microphone already granted ✅")
         return
     case .notDetermined:
+        // Vérifier UserDefaults (persistance inter-builds)
+        if UserDefaults.standard.bool(forKey: "gilbert.microphone_granted") {
+            print("[PERMISSIONS] Microphone previously granted (UserDefaults) ✅")
+            return
+        }
         print("[PERMISSIONS] Requesting microphone access...")
-        // requestAccess écrit dans TCC de façon persistante
         AVCaptureDevice.requestAccess(for: .audio) { granted in
+            if granted {
+                UserDefaults.standard.set(true, forKey: "gilbert.microphone_granted")
+            }
             print("[PERMISSIONS] Microphone: \(granted ? "✅ granted" : "⚠️ denied")")
         }
     case .denied, .restricted:
@@ -99,7 +155,15 @@ public func request_microphone_permission() {
 
 @_cdecl("has_microphone_permission")
 public func has_microphone_permission() -> Bool {
-    return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    let granted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    // Également vérifier UserDefaults pour inter-builds
+    if !granted && UserDefaults.standard.bool(forKey: "gilbert.microphone_granted") {
+        return true
+    }
+    if granted {
+        UserDefaults.standard.set(true, forKey: "gilbert.microphone_granted")
+    }
+    return granted
 }
 
 @_cdecl("sck_set_callbacks")
@@ -336,8 +400,18 @@ class SystemAudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
     }
 
     func startCapture() async throws {
-        // Get shareable content (requis même pour audio-only avec SCStream)
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        // Récupérer le contenu partageable.
+        // On utilise excludingDesktopWindows:true + onScreenWindowsOnly:true
+        // pour minimiser les permissions demandées (audio-only, pas besoin de voir les fenêtres).
+        // Si déjà accordé, SCK ne redemande JAMAIS la permission.
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        } catch {
+            // Fallback : essayer avec les paramètres complets si le premier échoue
+            sckDebugLog("[SCK] Fallback to full shareable content")
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        }
 
         // Get the main display
         guard let display = content.displays.first else {
@@ -409,6 +483,8 @@ class SystemAudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
 
         try await stream?.startCapture()
         isRecording = true
+        captureEverSucceeded = true  // La permission est OK — ne plus jamais redemander
+        UserDefaults.standard.set(true, forKey: "gilbert.screen_recording_granted")
 
         print("ScreenCaptureKit: Audio capture started")
     }
@@ -703,6 +779,186 @@ class SystemAudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
         isRecording = false
         onError?(error.localizedDescription)
     }
+}
+
+// MARK: - Native UNUserNotification avec boutons d'action (style Notion)
+
+/// Callback appelé depuis Swift quand l'user clique "Enregistrer" sur une notification
+public typealias NotificationActionCallback = @convention(c) () -> Void
+private var notificationActionCallback: NotificationActionCallback?
+
+/// Delegate qui capture les clics sur les boutons de notification
+private class GilbertNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    // Notification reçue quand l'app est en foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                 willPresent notification: UNNotification,
+                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Toujours afficher la bannière même si l'app est au premier plan
+        completionHandler([.banner, .sound])
+    }
+
+    // Action choisie par l'utilisateur
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                 didReceive response: UNNotificationResponse,
+                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        print("[NOTIF-SWIFT] Action reçue: \(response.actionIdentifier)")
+        // Bouton "Enregistrer" OU tap sur la notification → compact + enregistrement
+        if response.actionIdentifier == "RECORD_ACTION" || response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+            print("[NOTIF-SWIFT] → Enregistrer/tap notif, callback Rust")
+            DispatchQueue.main.async {
+                notificationActionCallback?()
+            }
+        }
+        completionHandler()
+    }
+}
+
+private var gilbertNotifDelegate: GilbertNotificationDelegate?
+
+/// Enregistre le callback Rust à appeler quand l'user clique "Enregistrer"
+@_cdecl("set_notification_action_callback")
+public func set_notification_action_callback(callback: NotificationActionCallback?) {
+    notificationActionCallback = callback
+    install_notification_delegate()
+}
+
+/// Demande la permission notifications macOS (UNUserNotificationCenter)
+/// Doit être appelée au démarrage de l'app (avant d'envoyer des notifications)
+@_cdecl("request_notification_permission")
+public func request_notification_permission() {
+    install_notification_delegate()
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+        if let error = error {
+            print("[NOTIF-SWIFT] Erreur permission: \(error)")
+        } else {
+            print("[NOTIF-SWIFT] Permission notifications: \(granted ? "✅ accordée" : "⚠️ refusée")")
+        }
+    }
+}
+
+/// Installe le delegate UNUserNotificationCenter — peut être rappelé plusieurs fois sans danger
+/// Tauri peut écraser le delegate après l'init — on expose cette fonction pour le réinstaller
+@_cdecl("reinstall_notification_delegate")
+public func reinstall_notification_delegate() {
+    install_notification_delegate()
+    print("[NOTIF-SWIFT] Delegate réinstallé ✅")
+}
+
+private func install_notification_delegate() {
+    DispatchQueue.main.async {
+        if gilbertNotifDelegate == nil {
+            gilbertNotifDelegate = GilbertNotificationDelegate()
+            print("[NOTIF-SWIFT] Delegate créé")
+        }
+        // Toujours réassigner — Tauri peut l'écraser
+        UNUserNotificationCenter.current().delegate = gilbertNotifDelegate
+
+        // Enregistrer les catégories de notification avec les boutons d'action
+        let recordAction = UNNotificationAction(
+            identifier: "RECORD_ACTION",
+            title: "Enregistrer",
+            options: [.foreground]
+        )
+        let ignoreAction = UNNotificationAction(
+            identifier: "IGNORE_ACTION",
+            title: "Ignorer",
+            options: []
+        )
+        let meetingCategory = UNNotificationCategory(
+            identifier: "MEETING_DETECTED",
+            actions: [recordAction, ignoreAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([meetingCategory])
+        print("[NOTIF-SWIFT] Catégories enregistrées, delegate actif ✅")
+    }
+}
+
+/// Envoie une notification native macOS avec boutons "Enregistrer" et "Ignorer"
+/// Utilise UNUserNotificationCenter → icône de l'app Gilbert, style bannière macOS natif
+@_cdecl("send_meeting_notification")
+public func send_meeting_notification(appName: UnsafePointer<CChar>) {
+    let name = String(cString: appName)
+    print("[NOTIF-SWIFT] Envoi notification réunion: \(name)")
+
+    let center = UNUserNotificationCenter.current()
+
+    // Vérifier la permission avant d'envoyer
+    center.getNotificationSettings { settings in
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            print("[NOTIF-SWIFT] Permission notifications non accordée: \(settings.authorizationStatus.rawValue)")
+            // Demander la permission si pas encore accordée
+            center.requestAuthorization(options: [.alert, .sound]) { granted, error in
+                if granted {
+                    send_meeting_notification(appName: appName)
+                }
+            }
+            return
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Une réunion ? Enregistrez avec Gilbert"
+        content.sound = UNNotificationSound.default
+        content.categoryIdentifier = "MEETING_DETECTED"
+
+        // ID fixe pour notification générique — remplace la notif précédente
+        let notifID = "gilbert-meeting-detected"
+        let request = UNNotificationRequest(
+            identifier: notifID,
+            content: content,
+            trigger: nil
+        )
+
+        center.add(request) { error in
+            if let error = error {
+                print("[NOTIF-SWIFT] Erreur envoi notification: \(error)")
+            } else {
+                print("[NOTIF-SWIFT] Notification envoyée ✅")
+            }
+        }
+    }
+}
+
+// MARK: - CoreAudio Microphone Activity Detection
+
+/// Retourne true si le microphone par défaut est actif (utilisé par une app).
+/// Correspond à l'indicateur orange dans la barre de menu macOS.
+/// Utilise kAudioDevicePropertyDeviceIsRunningSomewhere — ne nécessite pas de permission TCC.
+@_cdecl("is_microphone_active")
+public func is_microphone_active() -> Bool {
+    var defaultInputDevice: AudioDeviceID = kAudioObjectUnknown
+    var propertySize = UInt32(MemoryLayout<AudioDeviceID>.size)
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    let status = AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject),
+        &address, 0, nil,
+        &propertySize, &defaultInputDevice
+    )
+    guard status == noErr, defaultInputDevice != kAudioObjectUnknown else {
+        return false
+    }
+
+    var isRunning: UInt32 = 0
+    var propSize = UInt32(MemoryLayout<UInt32>.size)
+    var runningAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+        mScope: kAudioObjectPropertyScopeInput,
+        mElement: kAudioObjectPropertyElementMain
+    )
+    let status2 = AudioObjectGetPropertyData(
+        defaultInputDevice, &runningAddr, 0, nil,
+        &propSize, &isRunning
+    )
+    let active = status2 == noErr && isRunning != 0
+    if active {
+        print("[AUDIO-SWIFT] Microphone actif (kAudioDevicePropertyDeviceIsRunningSomewhere = 1)")
+    }
+    return active
 }
 
 // MARK: - Dock Reopen Handler

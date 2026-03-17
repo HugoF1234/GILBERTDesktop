@@ -2,38 +2,42 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Allow audio input (microphone) -->
+    <!-- PAS de sandbox — obligatoire pour que TCC soit persistant avec une signature adhoc -->
+    <!-- Une app sandboxée avec adhoc = TCC redemandé à chaque launch car hash change -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!-- Microphone -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
 
-    <!-- Allow audio recording from any source -->
+    <!-- Audio bridging (ScreenCaptureKit audio) -->
     <key>com.apple.security.device.audio-video-bridging</key>
     <true/>
 
-    <!-- Required for ScreenCaptureKit -->
+    <!-- Screen recording (ScreenCaptureKit / SCStream) -->
+    <key>com.apple.security.screen-capture</key>
+    <true/>
+
+    <!-- Hardened runtime — requis pour Swift FFI + ScreenCaptureKit -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
-
-    <!-- Allow network access for API calls -->
-    <key>com.apple.security.network.client</key>
-    <true/>
-
-    <!-- Allow reading user files -->
-    <key>com.apple.security.files.user-selected.read-write</key>
-    <true/>
-
-    <!-- Allow writing to app's own documents directory -->
-    <key>com.apple.security.files.downloads.read-write</key>
-    <true/>
-
-    <!-- Hardened runtime exceptions for Swift/ScreenCaptureKit -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
-
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
 
-    <!-- Automation for accessibility (optional, for detecting active windows) -->
+    <!-- Réseau -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- Fichiers utilisateur -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- AppleScript / Automation (détection fenêtres visio) -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
 </dict>

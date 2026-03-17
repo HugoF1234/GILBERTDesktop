@@ -8,3 +8,4 @@ pub mod recorder;
 pub mod state;
 pub mod system_audio;
 pub mod video_app_detector;
+pub mod window_state;

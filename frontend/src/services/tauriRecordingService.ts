@@ -21,6 +21,8 @@ export interface TauriStatus {
   is_recording: boolean;
   online: boolean;
   queue_len: number;
+  /** Nombre de jobs Pending/Failed (pour le badge Récupérer) */
+  pending_queue_count?: number;
   is_paused?: boolean;
   last_result?: {
     transcript?: string;
@@ -35,6 +37,7 @@ export interface TauriJob {
   retries: number;
   last_error?: string;
   updated_at: string;
+  title?: string;
 }
 
 /**
@@ -150,6 +153,27 @@ export async function tauriRequestSystemAudioPermission(): Promise<boolean> {
  */
 export async function tauriListJobs(): Promise<TauriJob[]> {
   return invoke<TauriJob[]>('list_jobs');
+}
+
+/**
+ * Relance l'upload de tous les jobs en attente
+ */
+export async function tauriRetryQueue(): Promise<TauriJob[]> {
+  return invoke<TauriJob[]>('retry_queue');
+}
+
+/**
+ * Relance l'upload d'un job spécifique
+ */
+export async function tauriRetryJob(jobId: string): Promise<TauriJob | null> {
+  return invoke<TauriJob | null>('retry_single_job', { job_id: jobId });
+}
+
+/**
+ * Supprime un job de la queue (et le fichier audio associé)
+ */
+export async function tauriDeleteJob(jobId: string): Promise<boolean> {
+  return invoke<boolean>('delete_job', { job_id: jobId });
 }
 
 /**

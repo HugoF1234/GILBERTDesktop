@@ -364,22 +364,24 @@ impl Recorder {
         static PERMISSION_REQUESTED: std::sync::atomic::AtomicBool =
             std::sync::atomic::AtomicBool::new(false);
 
+        // Vérifier la permission — si pas accordée, demander maintenant (au moment où l'user rec)
         if !unsafe { sck_has_permission() } {
             if PERMISSION_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
-                // Déjà demandé, ne pas redemander — l'utilisateur doit aller dans Réglages
-                return Err(RecorderError::PermissionDenied(
-                    "Screen Recording permission required. Please grant in System Preferences.".into()
-                ));
+                // Déjà demandé et refusé → l'utilisateur doit aller dans Réglages
+                println!("[RECORDER] ⚠️ Permission Screen Recording refusée — enregistrement sans son système");
+                // On ne retourne pas d'erreur : on continue sans son système (micro only)
+                return Ok(());
             }
             // Première demande : afficher la popup une seule fois
             println!("[RECORDER] Requesting Screen Recording permission (first time only)...");
             PERMISSION_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
             let granted = unsafe { sck_request_permission() };
             if !granted {
-                return Err(RecorderError::PermissionDenied(
-                    "Screen Recording permission required. Please grant in System Preferences.".into()
-                ));
+                println!("[RECORDER] ⚠️ Permission refusée — enregistrement sans son système");
+                // On continue sans son système plutôt que d'échouer complètement
+                return Ok(());
             }
+            println!("[RECORDER] ✅ Permission accordée");
         }
 
         let path_str = path.to_str()

@@ -67,13 +67,51 @@ function formatProfileData(data: ProfileData): ProfileData {
   };
 }
 
+const PROFILE_CACHE_KEY = 'gilbert_profile_cache';
+
+/**
+ * Sauvegarde le profil pour affichage offline (nom, photo)
+ */
+export function cacheProfileForOffline(profile: ProfileData): void {
+  try {
+    localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({
+      id: profile.id,
+      email: profile.email,
+      full_name: profile.full_name,
+      profile_picture_url: profile.profile_picture_url,
+      _cachedAt: Date.now(),
+    }));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Récupère le profil en cache (pour mode offline)
+ */
+export function getCachedProfile(): ProfileData | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      id: parsed.id,
+      email: parsed.email,
+      full_name: parsed.full_name ?? '',
+      profile_picture_url: parsed.profile_picture_url ?? null,
+      created_at: parsed.created_at ?? new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Get the current user's profile information
  */
 export async function getUserProfile(): Promise<ProfileData> {
-  // Utilise le point d'entrée décrit dans la documentation API
   const data = await apiClient.get<ProfileData>('/profile/me');
-  return formatProfileData(data);
+  const formatted = formatProfileData(data);
+  cacheProfileForOffline(formatted);
+  return formatted;
 }
 
 /**

@@ -392,7 +392,13 @@ const SettingsPage: React.FC = () => {
   const handleLogout = () => {
     sounds.click();
     logoutUser();
-    navigate('/auth', { replace: true });
+    // Dans Tauri, forcer un rechargement complet de la WebView pour repartir d'un état propre
+    if ((window as any).__TAURI__) {
+      sessionStorage.removeItem('gilbert_app_session');
+      window.location.replace('/');
+    } else {
+      navigate('/auth', { replace: true });
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -744,7 +750,7 @@ const SettingsPage: React.FC = () => {
                           )}
                         >
                           Annuel
-                          <span className="ml-1 text-[10px] text-emerald-600 font-medium">-17%</span>
+                          <span className="ml-1 text-[10px] text-emerald-600 font-medium">-20%</span>
                         </button>
                       </div>
                     )}
@@ -752,20 +758,20 @@ const SettingsPage: React.FC = () => {
                     {/* Prix dynamique selon la période */}
                     <p className="text-xl sm:text-2xl font-bold text-slate-900 mb-2 sm:mb-3">
                       {subscription?.plan === 'gilbert_plus_yearly' ? (
-                        // Abonné annuel : toujours afficher le prix annuel
-                        <>199,60€<span className="text-xs sm:text-sm font-normal">/an</span></>
+                        // Abonné annuel : toujours afficher le prix mensuel engagement
+                        <>19,90€<span className="text-xs sm:text-sm font-normal">/mois</span></>
                       ) : (
                         // Pas Pro OU mensuel : afficher selon le toggle
                         billingPeriod === 'yearly' ? (
-                          <>199,60€<span className="text-xs sm:text-sm font-normal">/an</span></>
+                          <>19,90€<span className="text-xs sm:text-sm font-normal">/mois</span></>
                         ) : (
-                          <>19,96€<span className="text-xs sm:text-sm font-normal">/mois</span></>
+                          <>24,90€<span className="text-xs sm:text-sm font-normal">/mois</span></>
                         )
                       )}
                     </p>
                     {billingPeriod === 'yearly' && subscription?.plan !== 'gilbert_plus_yearly' && (
                       <p className="text-xs text-emerald-600 mb-2 -mt-2">
-                        soit 16,63€/mois (économisez 40€/an)
+                        soit 19,90€/mois (économisez 60€/an avec l'engagement 12 mois)
                       </p>
                     )}
                     <div className="space-y-1 sm:space-y-1.5 mb-3 sm:mb-4">
@@ -790,7 +796,7 @@ const SettingsPage: React.FC = () => {
                       <button
                         onClick={() => {
                           sounds.click();
-                          if (window.confirm('Passer à l\'abonnement annuel (199,60€/an) ?\n\nVous économiserez 40€ par an. Le prorata sera calculé automatiquement.')) {
+                          if (window.confirm('Passer à l\'abonnement avec engagement 12 mois (19,90€/mois) ?\n\nVous économiserez 60€ sur l\'année. L\'engagement est ferme sur 12 mois. Le prorata sera calculé automatiquement.')) {
                             handleSwitchBillingPeriod('yearly');
                           }
                         }}
@@ -802,7 +808,7 @@ const SettingsPage: React.FC = () => {
                         ) : (
                           <Zap className="h-3.5 w-3.5" />
                         )}
-                        Passer à l'annuel (-17%)
+                        Passer à l'engagement 12 mois (-20%)
                       </button>
                     )}
 
@@ -830,7 +836,7 @@ const SettingsPage: React.FC = () => {
                           <div className="flex items-center gap-2 text-xs sm:text-sm text-slate-600">
                             <CreditCard className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-500 flex-shrink-0" />
                             <span>
-                              Plan : {subscription?.plan === 'gilbert_plus_yearly' ? 'Annuel' : 'Mensuel'}
+                              Plan : {subscription?.plan === 'gilbert_plus_yearly' ? 'Engagement 12 mois (19,90€/mois)' : 'Mensuel sans engagement (24,90€/mois)'}
                             </span>
                           </div>
                           {/* Période en cours */}
@@ -862,7 +868,7 @@ const SettingsPage: React.FC = () => {
                               <button
                                 onClick={() => {
                                   sounds.click();
-                                  if (window.confirm('Passer à l\'abonnement mensuel (19,96€/mois) ?\n\nLe changement prendra effet à votre prochaine période de facturation.')) {
+                                  if (window.confirm('Passer à l\'abonnement mensuel sans engagement (24,90€/mois) ?\n\nLe changement prendra effet à votre prochaine période de facturation.\n\nAttention : si votre engagement 12 mois est encore en cours, ce changement peut être refusé.')) {
                                     handleSwitchBillingPeriod('monthly');
                                   }
                                 }}

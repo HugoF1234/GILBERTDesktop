@@ -5,13 +5,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { X, CloudUpload, Download, Trash2, Loader2 } from 'lucide-react';
+import { X, CloudUpload, Download, Trash2, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { recordingStorage } from '@/services/recordingStorage';
 import { uploadMeeting } from '@/services/meetingService';
-import { getPendingRecordingsForRecovery } from '@/utils/recoveryUtils';
+import { getPendingRecordingsForRecovery, getPendingTauriJobs } from '@/utils/recoveryUtils';
+import { tauriRetryJob, tauriDeleteJob } from '@/services/tauriRecordingService';
+import type { TauriJob } from '@/services/tauriRecordingService';
 import { logger } from '@/utils/logger';
 
 interface RecordingRecoveryOverlayProps {
@@ -26,16 +28,22 @@ export default function RecordingRecoveryOverlay({
   onRecoveriesCompleted,
 }: RecordingRecoveryOverlayProps) {
   const [pendingRecordings, setPendingRecordings] = useState<any[]>([]);
+  const [pendingTauriJobs, setPendingTauriJobs] = useState<TauriJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingUuid, setUploadingUuid] = useState<string | null>(null);
+  const [retryingJobId, setRetryingJobId] = useState<string | null>(null);
   const [storageInfo, setStorageInfo] = useState<{ totalSizeMB: number; recordingsCount: number } | null>(null);
 
   const loadPendingRecordings = async () => {
     setLoading(true);
     try {
-      const recordings = await getPendingRecordingsForRecovery();
+      const [recordings, tauriJobs] = await Promise.all([
+        getPendingRecordingsForRecovery(),
+        getPendingTauriJobs(),
+      ]);
       setPendingRecordings(recordings);
-      logger.debug(`📦 ${recordings.length} enregistrement(s) à récupérer`);
+      setPendingTauriJobs(tauriJobs);
+      logger.debug(`📦 ${recordings.length} IndexedDB + ${tauriJobs.length} Tauri à récupérer`);
     } catch (error) {
       logger.error('Erreur chargement enregistrements:', error);
     } finally {
@@ -109,6 +117,47 @@ export default function RecordingRecoveryOverlay({
     }
   };
 
+  const handleRetryTauriJob = async (job: TauriJob) => {
+    setRetryingJobId(job.id);
+    try {
+      await tauriRetryJob(job.id);
+      const [recordings, tauriJobs] = await Promise.all([
+        getPendingRecordingsForRecovery(),
+        getPendingTauriJobs(),
+      ]);
+      setPendingRecordings(recordings);
+      setPendingTauriJobs(tauriJobs);
+      if (recordings.length + tauriJobs.length === 0 && onRecoveriesCompleted) {
+        setTimeout(() => onRecoveriesCompleted(), 500);
+      }
+    } catch (error) {
+      logger.error('Erreur retry job:', error);
+      alert(`Échec retry: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
+    } finally {
+      setRetryingJobId(null);
+    }
+  };
+
+  const handleDeleteTauriJob = async (job: TauriJob) => {
+    const title = job.title || job.file_path?.split('/').pop() || 'Enregistrement';
+    if (!window.confirm(`Supprimer cet enregistrement ?\n"${title}"\nCette action est irréversible.`)) return;
+    try {
+      await tauriDeleteJob(job.id);
+      const [recordings, tauriJobs] = await Promise.all([
+        getPendingRecordingsForRecovery(),
+        getPendingTauriJobs(),
+      ]);
+      setPendingRecordings(recordings);
+      setPendingTauriJobs(tauriJobs);
+      if (recordings.length + tauriJobs.length === 0 && onRecoveriesCompleted) {
+        setTimeout(() => onRecoveriesCompleted(), 500);
+      }
+    } catch (error) {
+      logger.error('Erreur suppression job:', error);
+      alert('Erreur lors de la suppression');
+    }
+  };
+
   const formatDate = (timestamp: number) =>
     new Date(timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const formatDuration = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
@@ -135,7 +184,7 @@ export default function RecordingRecoveryOverlay({
               Récupérer les enregistrements
             </CardTitle>
             <CardDescription>
-              {loading ? 'Chargement...' : `${pendingRecordings.length} fichier(s) à récupérer (connexion, crash ou erreur)`}
+              {loading ? 'Chargement...' : `${pendingRecordings.length + pendingTauriJobs.length} fichier(s) à récupérer (connexion, crash ou erreur)`}
               {storageInfo && !loading && ` • ${storageInfo.totalSizeMB} MB`}
             </CardDescription>
           </div>
@@ -148,7 +197,7 @@ export default function RecordingRecoveryOverlay({
             <div className="flex items-center justify-center flex-1 py-12">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
-          ) : pendingRecordings.length === 0 ? (
+          ) : pendingRecordings.length + pendingTauriJobs.length === 0 ? (
             <div className="flex flex-col items-center justify-center flex-1 py-12 text-center px-4">
               <p className="text-muted-foreground mb-4">Aucun enregistrement à récupérer.</p>
               <Button variant="outline" onClick={onClose}>
@@ -158,6 +207,51 @@ export default function RecordingRecoveryOverlay({
           ) : (
             <ScrollArea className="flex-1 rounded-b-xl" style={{ height: '320px' }}>
               <ul className="p-4 space-y-3">
+                {pendingTauriJobs.map((job) => (
+                  <li
+                    key={`tauri-${job.id}`}
+                    className="flex flex-col gap-2 p-3 rounded-lg border bg-card text-card-foreground"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{job.title || job.file_path?.split('/').pop() || 'Enregistrement'}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {job.updated_at ? new Date(job.updated_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                          {job.retries > 0 && ` • ${job.retries} tentative(s)`}
+                          {job.last_error && ` • ${job.last_error}`}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          size="sm"
+                          onClick={() => handleRetryTauriJob(job)}
+                          disabled={retryingJobId !== null}
+                        >
+                          {retryingJobId === job.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                          <span className="hidden sm:inline ml-1">Réessayer</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => handleDeleteTauriJob(job)}
+                          disabled={retryingJobId !== null}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    {retryingJobId === job.id && (
+                      <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
+                        <div className="h-full w-1/3 animate-pulse bg-primary rounded-full" />
+                      </div>
+                    )}
+                  </li>
+                ))}
                 {pendingRecordings.map((recording) => (
                   <li
                     key={recording.uuid}

@@ -6,12 +6,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Square, ChevronDown, Check, Pause, Play, FileAudio, WifiOff, Wifi, CloudOff, CloudUpload } from 'lucide-react';
+import { Square, ChevronDown, Check, Pause, Play, FileAudio, WifiOff, Wifi, CloudOff } from 'lucide-react';
 import { MicrophoneIcon } from '@/components/ui/SidebarIcons';
 import { DotLottieReact } from '@lottiefiles/dotlottie-react';
 import { recordingManager } from '@/services/recordingManager';
 import { recordingStorage } from '@/services/recordingStorage';
-import { getPendingRecordingsForRecovery } from '@/utils/recoveryUtils';
 import { uploadMeeting, watchTranscriptionStatus } from '@/services/meetingService';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useDataStore } from '@/stores/dataStore';
@@ -24,7 +23,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import SaveValidation from '@/components/ui/SaveValidation';
 import DiscardValidation from '@/components/ui/DiscardValidation';
 import { useRouteContext } from '@/hooks/useRouteContext';
-import RecordingRecoveryOverlay from '@/components/RecordingRecoveryOverlay';
 import { logger } from '@/utils/logger';
 import {
   isTauriApp,
@@ -145,8 +143,39 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [systemAudioPermission, setSystemAudioPermission] = useState<boolean | null>(null);
   // Ref pour le debounce de la désactivation du son système (évite le clignotement)
   const systemAudioOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mode compact (fenêtre principale réduite)
+  // Initialiser directement en compact si le flag sessionStorage est présent
+  // (cas : notification → Rust met en compact avant de montrer la fenêtre)
+  const [isCompact, setIsCompact] = useState(() => {
+    if (typeof window !== 'undefined' && sessionStorage.getItem('auto_start_recording_compact') === '1') {
+      return true;
+    }
+    // Vérifier la taille réelle de la fenêtre au montage
+    // Si la fenêtre est petite (≤ 200px) → on est déjà en compact
+    if (typeof window !== 'undefined' && window.innerWidth <= 200) {
+      return true;
+    }
+    return false;
+  });
 
-  // ── Écoute auto-start depuis tray / widget ──
+  // Synchroniser isCompact avec la taille réelle de la fenêtre
+  // Évite la vue compact affichée dans une grande fenêtre (bug: arrêt rapide après notif)
+  useEffect(() => {
+    const checkWindowSize = () => {
+      const compact = window.innerWidth <= 200;
+      setIsCompact(prev => {
+        if (!compact && prev) {
+          return false;
+        }
+        return prev;
+      });
+    };
+    checkWindowSize();
+    window.addEventListener('resize', checkWindowSize);
+    return () => window.removeEventListener('resize', checkWindowSize);
+  }, []);
+
+  // ── Écoute auto-start depuis tray ──
   useEffect(() => {
     if (!isTauriApp()) return;
     const tauri = (window as any).__TAURI__;
@@ -157,6 +186,132 @@ export function ImmersiveRecordingPage(): JSX.Element {
     return () => { p.then((u: () => void) => u()).catch(() => {}); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
+
+  // ── Écoute compact-mode-changed depuis Rust ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    const tauri = (window as any).__TAURI__;
+    if (!tauri?.event?.listen) return;
+    const p = tauri.event.listen('compact-mode-changed', (event: any) => {
+      const wantsCompact = !!event.payload;
+      if (wantsCompact) {
+        // Attendre que la fenêtre soit effectivement redimensionnée avant de switcher la vue
+        // Rust envoie l'event APRÈS hide/resize/show → mais WebKit peut avoir un délai de layout
+        // On poll la taille jusqu'à ce qu'elle soit ≤ 200px (max 1s)
+        let attempts = 0;
+        const checkSize = () => {
+          attempts++;
+          if (window.innerWidth <= 200) {
+            setIsCompact(true);
+          } else if (attempts < 10) {
+            // Re-vérifier dans 100ms (max 10 tentatives = 1s)
+            setTimeout(checkSize, 100);
+          } else {
+            // Forcer le mode compact après timeout même si la taille n'est pas encore 200px
+            // (peut arriver si l'event arrive avant le resize physique)
+            setIsCompact(true);
+          }
+        };
+        setTimeout(checkSize, 80);
+      } else {
+        setIsCompact(false);
+      }
+    });
+    return () => { p.then((u: () => void) => u()).catch(() => {}); };
+  }, []);
+
+  // ── Fermeture de la fenêtre compacte → dialog de confirmation si en cours ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    const tauri = (window as any).__TAURI__;
+    if (!tauri?.event?.listen) return;
+    const p = tauri.event.listen('compact-close-requested', async () => {
+      if (state === 'recording' || state === 'paused') {
+        // Dialog de confirmation natif via Tauri
+        const dialog = (window as any).__TAURI__?.dialog;
+        let confirmed = true;
+        if (dialog?.ask) {
+          confirmed = await dialog.ask(
+            'Un enregistrement est en cours. Voulez-vous l\'arrêter et sauvegarder ?',
+            { title: 'Arrêter l\'enregistrement ?', type: 'warning' }
+          );
+        }
+        if (confirmed) {
+          setIsCompact(false);
+          await tauriInvoke('exit_compact_mode');
+          setTimeout(() => handleStop(), 150);
+        }
+      } else {
+        // Pas en enregistrement → juste restaurer la grande fenêtre
+        setIsCompact(false);
+        tauriInvoke('exit_compact_mode');
+      }
+    });
+    return () => { p.then((u: () => void) => u()).catch(() => {}); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  // ── Écoute start-recording-from-notif + start-recording-compact (clic sur notification macOS) ──
+  // Aussi : démarrage auto si le flag sessionStorage 'auto_start_recording' est présent au montage
+  useEffect(() => {
+    if (!isTauriApp()) return;
+
+    // Vérifier si on arrive depuis une notification (flag posé par RootLayout)
+    const autoStart = sessionStorage.getItem('auto_start_recording');
+    if (autoStart === '1' && state === 'idle') {
+      sessionStorage.removeItem('auto_start_recording');
+      setTimeout(() => { handleStart(); }, 300);
+    }
+
+    // Vérifier si on arrive depuis une notification "compact" (démarrer + passer en compact)
+    const autoStartCompact = sessionStorage.getItem('auto_start_recording_compact');
+    if (autoStartCompact === '1' && state === 'idle') {
+      sessionStorage.removeItem('auto_start_recording_compact');
+      // isCompact est déjà true (initialisation du state) car Rust a mis en compact avant
+      // On démarre juste l'enregistrement, sans re-appeler enter_compact_mode
+      setTimeout(async () => {
+        await handleStart();
+        // S'assurer que le state compact est bien synchronisé (au cas où)
+        setIsCompact(true);
+      }, 200);
+    }
+
+    const tauri = (window as any).__TAURI__;
+    if (!tauri?.event?.listen) return;
+
+    // start-recording-from-notif : ouvrir grande fenêtre + enregistrer
+    const p1 = tauri.event.listen('start-recording-from-notif', async () => {
+      if (state !== 'idle') return;
+      sessionStorage.removeItem('auto_start_recording');
+      await tauriInvoke('exit_compact_mode');
+      setTimeout(() => { handleStart(); }, 400);
+    });
+
+    // start-recording-compact : passer en mode compact ET enregistrer immédiatement
+    // (utilisé quand l'user clique "Enregistrer" depuis la notification)
+    const p2 = tauri.event.listen('start-recording-compact', async () => {
+      if (state !== 'idle') return;
+      sessionStorage.removeItem('auto_start_recording');
+      // Le Rust a déjà mis la fenêtre en compact → setter isCompact immédiatement
+      setIsCompact(true);
+      // Démarrer l'enregistrement
+      await handleStart();
+    });
+
+    return () => {
+      p1.then((u: () => void) => u()).catch(() => {});
+      p2.then((u: () => void) => u()).catch(() => {});
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+
+  // ── Synchroniser IS_RECORDING_ACTIVE côté Rust ──
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    const isActive = state === 'recording' || state === 'paused';
+    tauriInvoke('set_recording_active', { active: isActive });
+  }, [state]);
+
   const [error, setError] = useState<string | null>(null);
   const [showSave, setShowSave] = useState(false);
   const [isUploading, setIsUploading] = useState(false); // État local pour l'UI
@@ -172,8 +327,6 @@ export function ImmersiveRecordingPage(): JSX.Element {
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('online');
   const [showOfflineWarning, setShowOfflineWarning] = useState(false);
-  const [hasPendingRecordings, setHasPendingRecordings] = useState(false);
-  const [showRecoveryOverlay, setShowRecoveryOverlay] = useState(false);
 
   // Discovery quota state
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
@@ -191,27 +344,59 @@ export function ImmersiveRecordingPage(): JSX.Element {
 
   // ── Vérification permission son système (Tauri, macOS) ──
   // Retry car __TAURI__ peut ne pas être disponible immédiatement après une navigation
+  // Aussi : on met en cache dans localStorage pour que la valeur soit disponible
+  // immédiatement au remontage (évite le flash "pas de son système" après reconnexion)
   useEffect(() => {
     let cancelled = false;
-    const check = async (retries = 3): Promise<void> => {
+
+    // Valeur cachée : afficher immédiatement si disponible pendant les retries
+    const cached = localStorage.getItem('gilbert_system_audio_permission');
+    if (cached === 'true' && !cancelled) setSystemAudioPermission(true);
+
+    const check = async (retries = 10): Promise<void> => {
       if (cancelled) return;
-      // Attendre que __TAURI__ soit disponible (peut prendre quelques ms après navigation)
       if (!isTauriApp()) {
         if (retries > 0) {
-          setTimeout(() => check(retries - 1), 200);
+          setTimeout(() => check(retries - 1), 300);
           return;
         }
         return;
       }
       try {
         const hasPerm = await tauriHasSystemAudioPermission();
-        if (!cancelled) setSystemAudioPermission(hasPerm);
+        if (!cancelled) {
+          setSystemAudioPermission(hasPerm);
+          // Mettre en cache pour la prochaine session
+          localStorage.setItem('gilbert_system_audio_permission', hasPerm ? 'true' : 'false');
+        }
       } catch {
-        if (!cancelled) setSystemAudioPermission(false);
+        if (retries > 0) {
+          setTimeout(() => check(retries - 1), 300);
+        } else {
+          if (!cancelled) setSystemAudioPermission(false);
+        }
       }
     };
     check();
-    return () => { cancelled = true; };
+
+    // Re-vérifier quand la fenêtre reprend le focus
+    // (l'user peut avoir accordé/révoqué la permission dans System Settings)
+    const onFocus = async () => {
+      if (cancelled || !isTauriApp()) return;
+      try {
+        const hasPerm = await tauriHasSystemAudioPermission();
+        if (!cancelled) {
+          setSystemAudioPermission(hasPerm);
+          localStorage.setItem('gilbert_system_audio_permission', hasPerm ? 'true' : 'false');
+        }
+      } catch {}
+    };
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   // ── Gestion Tauri au montage/démontage ──
@@ -448,7 +633,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
               let sum = 0;
               for (let i = 0; i < 32; i++) sum += data[i];
               const level = sum / 32 / 255;
-              setAudioLevel(prev => prev * 0.3 + level * 0.7);
+              setAudioLevel(Math.min(1, level * 8));
               animationRef.current = requestAnimationFrame(update);
             };
             update();
@@ -461,30 +646,6 @@ export function ImmersiveRecordingPage(): JSX.Element {
       }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ✅ Vérifier périodiquement s'il y a des enregistrements en attente (exclut ceux déjà transcrits)
-  useEffect(() => {
-    const checkPendingRecordings = async () => {
-      try {
-        const pendingRecordings = await getPendingRecordingsForRecovery();
-        const currentRecordingUuid = recordingManager.getCurrentRecordingUuid();
-        const oldFailedRecordings = pendingRecordings.filter(
-          (r: { uuid: string }) => r.uuid !== currentRecordingUuid
-        );
-        setHasPendingRecordings(oldFailedRecordings.length > 0);
-      } catch (error) {
-        logger.error('Erreur vérification enregistrements pendants:', error);
-      }
-    };
-
-    // Vérifier immédiatement
-    checkPendingRecordings();
-
-    // Vérifier toutes les 30 secondes
-    const interval = setInterval(checkPendingRecordings, 30000);
-
-    return () => clearInterval(interval);
-  }, []);
 
   // 🎯 Vérifier le quota Discovery au chargement
   useEffect(() => {
@@ -538,23 +699,17 @@ export function ImmersiveRecordingPage(): JSX.Element {
               logger.error('❌ Erreur lors du flush d\'urgence:', error);
             }
           } else if (status === 'online' && showOfflineWarning) {
-            // Auto-dismiss warning when back online
             setTimeout(() => setShowOfflineWarning(false), 2000);
-            
-            // ✅ Vérifier s'il y a des enregistrements en attente après reconnexion (exclut déjà transcrits)
+            // Auto-retry upload des enregistrements en attente (IndexedDB)
             try {
+              const { getPendingRecordingsForRecovery } = await import('@/utils/recoveryUtils');
               const pendingRecordings = await getPendingRecordingsForRecovery();
               const currentRecordingUuid = recordingManager.getCurrentRecordingUuid();
               const oldFailedRecordings = pendingRecordings.filter(
                 (r: { uuid: string }) => r.uuid !== currentRecordingUuid
               );
               if (oldFailedRecordings.length > 0) {
-                logger.debug(`📦 ${oldFailedRecordings.length} enregistrement(s) en attente détecté(s) après reconnexion`);
-                setHasPendingRecordings(true);
-                // Optionnel : ouvrir automatiquement le dialog après reconnexion
-                // setShowRecoveryDialog(true);
-              } else {
-                setHasPendingRecordings(false);
+                autoRetryPendingUploads(oldFailedRecordings);
               }
             } catch (error) {
               logger.error('Erreur vérification enregistrements en attente:', error);
@@ -649,14 +804,35 @@ export function ImmersiveRecordingPage(): JSX.Element {
     // ── Mode Tauri (app desktop) : audio système + micro via Rust ──
     if (isTauriApp()) {
       try {
+        // Auto-titre si l'utilisateur n'a pas encore saisi de titre
+        let effectiveTitle = title;
+        if (!effectiveTitle || effectiveTitle.trim() === '') {
+          try {
+            const activeApp = await tauriInvoke('get_active_video_app') as string | null;
+            const today = new Date().toLocaleDateString('fr-FR', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            });
+            if (activeApp) {
+              effectiveTitle = `Réunion ${activeApp} — ${today}`;
+            } else {
+              effectiveTitle = `Enregistrement — ${today}`;
+            }
+            setTitle(effectiveTitle);
+          } catch {
+            // En cas d'erreur, on garde le titre vide
+          }
+        }
+
         const token = tauriRecordingService.getAuthToken();
-        await tauriStartRecording('both', token, title || undefined);
+        await tauriStartRecording('both', token, effectiveTitle || undefined);
 
         // Polling des niveaux audio pour la visualisation des barres
         tauriRecordingService.startAudioLevelPolling({
-          onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
+          onMicLevel: (level) => setAudioLevel(Math.min(1, level * 8)),
           onSystemLevel: (level) => {
-            setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
+            setSystemAudioLevel(Math.min(1, level * 8));
             if (level > 0.01) {
               // Son détecté → activer immédiatement et annuler le timer d'extinction
               if (systemAudioOffTimerRef.current) {
@@ -776,9 +952,9 @@ export function ImmersiveRecordingPage(): JSX.Element {
       await tauriResumeRecording();
       // Reprendre le polling des niveaux audio
       tauriRecordingService.startAudioLevelPolling({
-        onMicLevel: (level) => setAudioLevel((prev) => prev * 0.3 + level * 0.7),
+        onMicLevel: (level) => setAudioLevel(Math.min(1, level * 8)),
         onSystemLevel: (level) => {
-          setSystemAudioLevel((prev) => prev * 0.3 + level * 0.7);
+          setSystemAudioLevel(Math.min(1, level * 8));
           if (level > 0.01) {
             if (systemAudioOffTimerRef.current) {
               clearTimeout(systemAudioOffTimerRef.current);
@@ -975,24 +1151,17 @@ export function ImmersiveRecordingPage(): JSX.Element {
         }
       }
       
-      // ✅ CORRECTION #1 : Si offline, fermer le dialog et permettre de quitter
+      // ✅ Si offline, fermer le dialog — l'audio est sauvegardé, upload auto à la reconnexion
       if (isOfflineError) {
-        setError('Pas de connexion internet. L\'enregistrement est sauvegardé localement et pourra être uploadé plus tard.');
-        // Fermer le dialog pour permettre à l'utilisateur de quitter
+        setError('Pas de connexion internet. L\'enregistrement est sauvegardé localement et sera uploadé automatiquement à la reconnexion.');
         setShowSave(false);
         setShowSaveDialog(false);
-        // Reset les états
         setAudioBlob(null);
         setTitle('');
         setState('idle');
         resetRecordingStore();
         setRecordingState('idle');
         setRecordingDuration(0);
-        
-        // ✅ CORRECTION : Message plus clair sans référence à un menu inexistant
-        setTimeout(() => {
-          alert('📦 Enregistrement sauvegardé localement\n\nVous pourrez l\'uploader plus tard depuis la page d\'accueil. Un bouton "Récupérer les enregistrements" apparaîtra automatiquement quand vous reviendrez sur la page.');
-        }, 500);
       } else {
         // Pour les autres erreurs, garder le dialog ouvert pour réessayer
         setError(err?.message || 'Erreur upload - L\'enregistrement a été sauvegardé localement et pourra être uploadé plus tard');
@@ -1003,6 +1172,33 @@ export function ImmersiveRecordingPage(): JSX.Element {
       if (setIsUploadingGlobal) setIsUploadingGlobal(false);
     }
   }, [audioBlob, title, stopViz, resetRecordingStore, setIsUploadingGlobal, connectionStatus, setRecordingState, setRecordingDuration]);
+
+  // Retry auto d'upload pour les enregistrements sauvegardés localement après reconnexion
+  const autoRetryPendingUploads = useCallback(async (pendingRecordings: any[]) => {
+    if (pendingRecordings.length === 0) return;
+    logger.debug(`🔄 Auto-retry upload pour ${pendingRecordings.length} enregistrement(s)...`);
+    let successCount = 0;
+    for (const rec of pendingRecordings) {
+      try {
+        const stored = await recordingStorage.getRecording(rec.uuid);
+        if (!stored?.blob) continue;
+        const recTitle = stored.metadata?.title || rec.metadata?.title || 'Enregistrement récupéré';
+        const file = new File([stored.blob], `${rec.uuid}.webm`, { type: stored.blob.type || 'audio/webm' });
+        const meeting = await uploadMeeting(file, recTitle);
+        await recordingStorage.updateUploadStatus(rec.uuid, 'completed', meeting.id);
+        await recordingStorage.deleteRecording(rec.uuid);
+        addMeetingToStore(meeting);
+        successCount++;
+        logger.debug(`✅ Auto-retry réussi : ${recTitle}`);
+      } catch (err) {
+        logger.warn(`⚠️ Auto-retry échoué pour ${rec.uuid}:`, err);
+      }
+    }
+    if (successCount > 0) {
+      logger.debug(`✅ ${successCount} enregistrement(s) uploadé(s) après reconnexion`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addMeetingToStore]);
 
   // Callback quand l'animation de validation est terminée
   const handleSaveValidationComplete = useCallback(() => {
@@ -1139,7 +1335,130 @@ export function ImmersiveRecordingPage(): JSX.Element {
 
   return (
     <div className="h-full w-full relative overflow-hidden flex flex-col bg-gradient-to-br from-slate-50 via-blue-50/30 to-slate-50">
-      {/* 🎯 Bannière quota Discovery épuisé - minimaliste */}
+
+      {/* Masque le contenu principal pendant le mode compact pour éviter le flash visuel */}
+      {isCompact && (
+        <div className="fixed inset-0 z-[9998] bg-white" />
+      )}
+
+      {/* ── Vue compacte (mode mini-fenêtre, toujours au premier plan) ── */}
+      {isCompact && (
+        <div className="fixed inset-0 z-[9999] flex flex-col bg-white select-none overflow-hidden" style={{ borderRadius: 10 }}>
+
+          {/* Header drag */}
+          <div className="flex items-center justify-between px-2.5 pt-2 pb-1 shrink-0"
+            style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+            <div className="flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${state === 'recording' ? 'bg-red-400 animate-pulse' : state === 'paused' ? 'bg-amber-400' : 'bg-slate-400'}`} />
+              <span className="text-[9px] font-bold tracking-widest uppercase"
+                style={{ color: state === 'recording' ? '#6366f1' : state === 'paused' ? '#f59e0b' : '#64748b' }}>
+                {state === 'recording' ? 'Rec' : state === 'paused' ? 'Pause' : 'Gilbert'}
+              </span>
+            </div>
+            <button onClick={() => { setIsCompact(false); tauriInvoke('exit_compact_mode'); }} title="Agrandir"
+              className="text-slate-400 hover:text-slate-600 transition-colors shrink-0"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          </div>
+
+          {/* VU-mètres micro + système — 5 barres chacun, plus réactifs */}
+          <div className="flex items-stretch px-2.5 pb-1 shrink-0">
+            <div className="flex flex-col items-center gap-1 flex-1">
+              <span className="text-[9px] font-semibold" style={{ color: '#475569' }}>Micro</span>
+              <div className="flex items-end justify-center gap-[3px] w-full" style={{ height: 20 }}>
+                {[...Array(5)].map((_, i) => {
+                  const base = 0.5 + (1 - Math.abs(i - 2) / 2) * 0.5;
+                  const wave = Math.sin(Date.now() * 0.012 + i * 1.1) * 0.4 + 0.6;
+                  const h = state === 'recording'
+                    ? Math.max(20, 15 + audioLevel * 110 * base * wave)
+                    : state === 'paused' ? 20
+                    : Math.max(15, 14 + audioLevel * 20 * base);
+                  return <motion.div key={i} className="flex-1 rounded-sm"
+                    style={{ backgroundColor: state === 'paused' ? 'rgba(251,191,36,0.7)' : state === 'recording' ? 'rgba(99,102,241,0.8)' : 'rgba(100,116,139,0.45)' }}
+                    animate={{ height: `${h}%` }} transition={{ duration: 0.05, ease: 'easeOut' }} />;
+                })}
+              </div>
+            </div>
+            <div className="w-px mx-2 self-stretch shrink-0" style={{ backgroundColor: '#e2e8f0' }} />
+            <div className="flex flex-col items-center gap-1 flex-1">
+              <div className="flex items-center gap-1">
+                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${systemAudioPermission === false ? 'bg-red-400' : systemAudioActive ? 'bg-green-400' : 'bg-slate-400'}`} />
+                <span className="text-[9px] font-semibold" style={{ color: '#475569' }}>Sys.</span>
+              </div>
+              <div className="flex items-end justify-center gap-[3px] w-full" style={{ height: 20 }}>
+                {[...Array(5)].map((_, i) => {
+                  const base = 0.5 + (1 - Math.abs(i - 2) / 2) * 0.5;
+                  const wave = Math.sin(Date.now() * 0.008 + i * 1.3) * 0.4 + 0.6;
+                  const h = state === 'recording' && systemAudioActive
+                    ? Math.max(20, 15 + systemAudioLevel * 110 * base * wave) : 12;
+                  return <motion.div key={i} className="flex-1 rounded-sm"
+                    style={{ backgroundColor: systemAudioPermission === false ? 'rgba(239,68,68,0.55)' : systemAudioActive ? 'rgba(34,197,94,0.75)' : 'rgba(100,116,139,0.3)' }}
+                    animate={{ height: `${h}%` }} transition={{ duration: 0.05, ease: 'easeOut' }} />;
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-2.5 h-px shrink-0" style={{ backgroundColor: '#e2e8f0' }} />
+
+          {/* Timer */}
+          <div className="flex flex-col items-center justify-center flex-1 min-h-0">
+            <div className="text-[28px] font-bold tabular-nums tracking-tight leading-none"
+              style={{ color: state === 'recording' ? '#1e293b' : state === 'paused' ? '#f59e0b' : '#475569' }}>
+              {String(Math.floor(duration / 60)).padStart(2, '0')}:{String(duration % 60).padStart(2, '0')}
+            </div>
+            <div className="text-[9px] font-medium mt-0.5" style={{ color: '#94a3b8' }}>
+              {state === 'recording' ? 'En cours' : state === 'paused' ? 'En pause' : 'Prêt'}
+            </div>
+          </div>
+
+          <div className="mx-2.5 h-px shrink-0" style={{ backgroundColor: '#e2e8f0' }} />
+
+          {/* Boutons — icônes seules, label en dessous */}
+          <div className="flex gap-1.5 px-2.5 py-2 shrink-0">
+            {state === 'idle' && (
+              <button onClick={() => handleStart()}
+                className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg transition-colors"
+                style={{ backgroundColor: '#6366f1' }}>
+                <div className="w-2.5 h-2.5 rounded-full bg-white/90" />
+                <span className="text-[8px] font-semibold text-white/90">Enregistrer</span>
+              </button>
+            )}
+            {(state === 'recording' || state === 'paused') && (
+              <>
+                {state === 'recording' ? (
+                  <button onClick={() => handlePause()}
+                    className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg transition-colors"
+                    style={{ backgroundColor: '#f1f5f9', color: '#475569' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                    <span className="text-[8px] font-semibold">Pause</span>
+                  </button>
+                ) : (
+                  <button onClick={() => handleResume()}
+                    className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg transition-colors"
+                    style={{ backgroundColor: '#f1f5f9', color: '#475569' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+                    <span className="text-[8px] font-semibold">Reprendre</span>
+                  </button>
+                )}
+                <button
+                  onClick={async () => { setIsCompact(false); await tauriInvoke('exit_compact_mode'); setTimeout(() => handleStop(), 150); }}
+                  className="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg transition-colors"
+                  style={{ backgroundColor: '#fff1f2', color: '#f87171' }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                  <span className="text-[8px] font-semibold">Terminer</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Bannière quota Discovery épuisé - minimaliste */}
       {isQuotaExceeded && state === 'idle' && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
@@ -1264,41 +1583,9 @@ export function ImmersiveRecordingPage(): JSX.Element {
         )}
       </AnimatePresence>
 
-      {/* Indicateur de connexion en haut à gauche */}
-      <AnimatePresence>
-        {connectionStatus !== 'online' && (
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: -20 }}
-            className="absolute top-4 left-4 z-20"
-          >
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl backdrop-blur-sm border text-sm font-medium ${
-              connectionStatus === 'offline'
-                ? 'bg-amber-50/90 border-amber-200 text-amber-700'
-                : 'bg-slate-50/90 border-slate-200 text-slate-600'
-            }`}>
-              {connectionStatus === 'offline' ? (
-                <>
-                  <WifiOff className="w-4 h-4" />
-                  <span>Hors ligne</span>
-                </>
-              ) : (
-                <>
-                  <motion.div
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-                    className="w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full"
-                  />
-                  <span>Vérification...</span>
-                </>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Indicateur offline : affiché dans la Sidebar (évite conflit d'affichage avec la languette flottante) */}
 
-      {/* Sélecteur de micro et bouton de récupération en haut à droite : Micro au-dessus, Récupérer en dessous, même taille */}
+      {/* Sélecteur de micro en haut à droite : Micro au-dessus, Récupérer en dessous, même taille */}
       <div className="absolute top-4 right-4 z-20 flex flex-col items-end gap-2">
         <div className="relative">
           <button
@@ -1358,44 +1645,24 @@ export function ImmersiveRecordingPage(): JSX.Element {
           </AnimatePresence>
         </div>
 
-        {/* Bouton mini-widget flottant (Tauri uniquement) */}
+        {/* Bouton mode compact (Tauri uniquement) */}
         {isTauriApp() && (
           <Button
-            onClick={() => tauriInvoke('toggle_widget')}
+            onClick={() => tauriInvoke('enter_compact_mode')}
             className="flex items-center gap-2 px-3 py-2 text-sm text-slate-500 hover:text-slate-700
                        rounded-xl bg-white/80 hover:bg-white border border-slate-200/60
                        transition-all duration-200 shadow-sm"
             type="button"
-            title="Mini-widget flottant"
+            title="Passer en mode compact"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="7" width="20" height="14" rx="2"/>
-              <path d="M16 3h2a2 2 0 0 1 2 2"/>
-              <path d="M8 3H6a2 2 0 0 0-2 2"/>
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M9 9h6v6H9z"/>
             </svg>
-            <span className="hidden sm:inline">Widget</span>
+            <span className="hidden sm:inline">Compact</span>
           </Button>
         )}
 
-        {/* Bouton Récupérer : même taille que le bouton Micro, sous le micro */}
-        {hasPendingRecordings && (          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="relative"
-          >
-            <Button
-              onClick={() => setShowRecoveryOverlay(true)}
-              className="flex items-center gap-2 px-3 py-2 text-sm text-amber-600 hover:text-amber-700
-                         rounded-xl bg-amber-50/90 hover:bg-amber-100 border border-amber-200/60
-                         transition-all duration-200 shadow-sm font-medium"
-              type="button"
-            >
-              <CloudUpload className="w-4 h-4" />
-              <span className="hidden sm:inline">Récupérer</span>
-            </Button>
-          </motion.div>
-        )}
       </div>
 
       {/* Contenu principal - Overlay */}
@@ -1895,14 +2162,6 @@ export function ImmersiveRecordingPage(): JSX.Element {
         )}
       </AnimatePresence>
 
-      <RecordingRecoveryOverlay
-        open={showRecoveryOverlay}
-        onClose={() => setShowRecoveryOverlay(false)}
-        onRecoveriesCompleted={() => {
-          setShowRecoveryOverlay(false);
-          setHasPendingRecordings(false);
-        }}
-      />
     </div>
   );
 }

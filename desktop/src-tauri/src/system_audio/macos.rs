@@ -90,9 +90,15 @@ impl SystemAudioCapture for MacOSSystemAudio {
             return Err(SystemAudioError::AlreadyRecording);
         }
 
-        // Check permission first
+        // Si permission non accordée → la demander maintenant (popup système une seule fois)
         if !unsafe { sck_has_permission() } {
-            return Err(SystemAudioError::PermissionDenied);
+            println!("[SYSTEM-AUDIO] Permission Screen Recording non accordée → demande...");
+            let granted = unsafe { sck_request_permission() };
+            if !granted {
+                println!("[SYSTEM-AUDIO] ⚠️ Permission refusée — son système désactivé");
+                return Err(SystemAudioError::PermissionDenied);
+            }
+            println!("[SYSTEM-AUDIO] ✅ Permission accordée");
         }
 
         // Convert path to C string

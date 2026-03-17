@@ -37,6 +37,8 @@ pub struct StatusPayload {
     pub system_audio_permission: bool,
     pub online: bool,
     pub queue_len: usize,
+    /// Nombre de jobs Pending ou Failed (pour le badge Récupérer)
+    pub pending_queue_count: usize,
     pub last_result: Option<ApiResult>,
 }
 
@@ -78,6 +80,63 @@ impl AppState {
             online: Mutex::new(true),
             last_result: Mutex::new(None),
             system_audio_permission_cache: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Scanne le dossier audio/ au démarrage et enregistre dans la queue
+    /// tous les fichiers WAV qui ne sont pas déjà référencés.
+    /// Cela protège contre les crashes pendant un enregistrement.
+    pub async fn recover_orphaned_audio_files(&self) {
+        let audio_dir = &self.dirs.audio_dir;
+        let wav_files: Vec<PathBuf> = match std::fs::read_dir(audio_dir) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.extension().and_then(|e| e.to_str()) == Some("wav")
+                        && p.metadata().map(|m| m.len() > 1024).unwrap_or(false) // > 1 Ko = enregistrement réel
+                })
+                .collect(),
+            Err(_) => return,
+        };
+
+        if wav_files.is_empty() {
+            return;
+        }
+
+        let mut queue = self.queue.lock().await;
+
+        // Construire l'ensemble des fichiers déjà dans la queue
+        let known: std::collections::HashSet<String> = queue
+            .store
+            .jobs
+            .iter()
+            .filter(|j| j.status != crate::queue::JobStatus::Done)
+            .map(|j| j.file_path.clone())
+            .collect();
+
+        // Lire le token/titre de la dernière session (crash recovery)
+        let (session_token, session_title) = self.load_recording_session().unwrap_or((None, None));
+
+        let mut orphans = 0usize;
+        for wav in wav_files {
+            let path_str = wav.display().to_string();
+            // Ignorer les fichiers déjà dans la queue
+            if known.contains(&path_str) {
+                continue;
+            }
+            let name = wav.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            println!("[RECOVERY] Fichier WAV orphelin détecté: {}", name);
+
+            let title = session_title.clone().unwrap_or_else(|| "Enregistrement récupéré".to_string());
+            let _ = queue.enqueue_with_metadata(wav.clone(), session_token.clone(), Some(title), None);
+            orphans += 1;
+        }
+
+        if orphans > 0 {
+            println!("[RECOVERY] ✅ {} fichier(s) audio orphelin(s) ajouté(s) à la queue", orphans);
+            // Effacer la session en cours (le crash est terminé, les fichiers sont en queue)
+            self.clear_recording_session();
         }
     }
 
@@ -145,19 +204,25 @@ impl AppState {
     pub async fn status(&self) -> StatusPayload {
         println!("[STATE] status() called");
 
-        // Obtenir queue_len avec un timeout pour éviter les deadlocks
-        let queue_len = {
+        // Obtenir queue_len et pending_queue_count avec un timeout pour éviter les deadlocks
+        let (queue_len, pending_queue_count) = {
             use tokio::time::{timeout, Duration};
             match timeout(Duration::from_millis(100), self.queue.lock()).await {
-                Ok(guard) => guard.store.jobs.len(),
+                Ok(guard) => {
+                    let total = guard.store.jobs.len();
+                    let pending = guard.store.jobs.iter()
+                        .filter(|j| j.status == crate::queue::JobStatus::Pending || j.status == crate::queue::JobStatus::Failed)
+                        .count();
+                    (total, pending)
+                }
                 Err(_) => {
                     println!("[STATE] ⚠️ Timeout sur queue.lock(), utilisant 0");
-                    0
+                    (0, 0)
                 }
             }
         };
 
-        println!("[STATE] queue_len = {}", queue_len);
+        println!("[STATE] queue_len = {}, pending_queue_count = {}", queue_len, pending_queue_count);
 
         // Obtenir les valeurs system_audio — NE PAS appeler has_permission() ici
         // car cela triggerait SCShareableContent à chaque get_status (toutes les 3s)
@@ -190,6 +255,7 @@ impl AppState {
             system_audio_permission,
             online,
             queue_len,
+            pending_queue_count,
             last_result,
         }
     }
@@ -223,6 +289,39 @@ impl AppState {
         result
     }
 
+    /// Sauvegarde le token/titre dans recording_session.json au démarrage.
+    /// En cas de crash, le scan d'orphelins peut utiliser ces métadonnées.
+    pub fn save_recording_session(&self, token: Option<&str>, title: Option<&str>) {
+        let session_file = self.dirs.root.join("recording_session.json");
+        let data = serde_json::json!({
+            "token": token,
+            "title": title,
+            "started_at": chrono::Utc::now().to_rfc3339()
+        });
+        if let Ok(json) = serde_json::to_string_pretty(&data) {
+            let _ = std::fs::write(&session_file, json);
+        }
+    }
+
+    /// Supprime la session en cours (appelé après stop réussi ou annulation)
+    pub fn clear_recording_session(&self) {
+        let session_file = self.dirs.root.join("recording_session.json");
+        let _ = std::fs::remove_file(&session_file);
+    }
+
+    /// Lit la dernière session sauvegardée (pour récupérer token/titre après crash)
+    pub fn load_recording_session(&self) -> Option<(Option<String>, Option<String>)> {
+        let session_file = self.dirs.root.join("recording_session.json");
+        if !session_file.exists() {
+            return None;
+        }
+        let data = std::fs::read_to_string(&session_file).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&data).ok()?;
+        let token = v["token"].as_str().map(|s| s.to_string());
+        let title = v["title"].as_str().map(|s| s.to_string());
+        Some((token, title))
+    }
+
     /// Notifie le backend du début d'un enregistrement (async, non-bloquant)
     pub async fn notify_recording_start(&self, token: Option<String>, meeting_title: Option<String>) {
         println!("🎙️ [STATE] Notification début enregistrement au backend...");
@@ -254,6 +353,9 @@ impl AppState {
     /// Annuler l'enregistrement sans uploader (abandon)
     pub fn cancel_recording(&self) -> Result<(), StateError> {
         println!("🗑️ [STATE] Annulation de l'enregistrement (abandon)...");
+
+        // Effacer la session sauvegardée
+        self.clear_recording_session();
 
         // Arrêter l'enregistrement et obtenir le chemin du fichier
         let path = self.recorder.lock().stop();
@@ -297,6 +399,7 @@ impl AppState {
         let path = self.recorder.lock().stop();
         let Some(path) = path else {
             println!("⚠️ [STATE] Aucun fichier audio à traiter");
+            self.clear_recording_session();
             return Ok(());
         };
 
@@ -323,6 +426,8 @@ impl AppState {
                     // Remove audio file after successful processing to save disk
                     let _ = std::fs::remove_file(&path);
                     println!("🗑️ [STATE] Fichier audio supprimé après traitement");
+                    // Session terminée avec succès
+                    self.clear_recording_session();
                 }
                 Err(e) => {
                     println!("❌ [STATE] Erreur lors de la transcription: {}", e);
@@ -333,6 +438,7 @@ impl AppState {
                     queue
                         .enqueue_with_metadata(path, token, title.clone(), None)
                         .map_err(|err| StateError::Queue(err.to_string()))?;
+                    self.clear_recording_session();
                     return Err(StateError::Api(e.to_string()));
                 }
             }
@@ -343,6 +449,8 @@ impl AppState {
             queue
                 .enqueue_with_metadata(path, token, title.clone(), None)
                 .map_err(|e| StateError::Queue(e.to_string()))?;
+            // Session mise en queue — on efface la session en cours
+            self.clear_recording_session();
         }
         Ok(())
     }

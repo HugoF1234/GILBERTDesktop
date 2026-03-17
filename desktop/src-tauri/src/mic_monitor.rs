@@ -28,7 +28,7 @@ pub struct MicMonitor {
     monitoring: Arc<AtomicBool>,
     stream: Option<Stream>,
     last_notification: Arc<AtomicU64>,
-    app_identifier: String,
+    _app_identifier: String,
     app_handle: Option<tauri::AppHandle>,
 }
 
@@ -37,8 +37,9 @@ unsafe impl Send for MicMonitor {}
 unsafe impl Sync for MicMonitor {}
 
 const VIDEO_APPS: &[&str] = &[
-    "discord", "zoom", "teams", "slack", "webex",
-    "facetime", "skype", "whereby", "around", "loom", "riverside",
+    "discord", "zoom", "msteams", "microsoft teams", "teams2",
+    "slack", "webex", "facetime", "skype", "whereby",
+    "around", "loom", "riverside", "jitsi",
 ];
 
 impl MicMonitor {
@@ -47,7 +48,7 @@ impl MicMonitor {
             monitoring: Arc::new(AtomicBool::new(false)),
             stream: None,
             last_notification: Arc::new(AtomicU64::new(0)),
-            app_identifier,
+            _app_identifier: app_identifier,
             app_handle: None,
         }
     }
@@ -120,11 +121,29 @@ impl MicMonitor {
                                     let app_handle_clone = app_handle_opt.clone();
                                     println!("🔔 MicMonitor: activité détectée, app={:?} | RMS={:.4}", video_app_name, rms);
 
-                                    // Lancer la notification interactive dans un thread séparé
-                                    // pour ne pas bloquer le thread audio
+                                    // N'envoyer la notification que si une app de visio connue est détectée
+                                    // Si video_app = None (activité micro système/inconnue), on ignore
+                                    // Cela évite les faux positifs "audio compte" / processus système macOS
+                                    if video_app_name.is_none() {
+                                        println!("🔇 MicMonitor: pas d'app de visio détectée, notification ignorée");
+                                        last_notif.store(now_sys, Ordering::SeqCst);
+                                        *guard = None;
+                                        return;
+                                    }
+
+                                    // 1. Notification macOS native cliquable (Centre de notifications)
+                                    // Un clic dessus → l'app se lève et démarre l'enregistrement
+                                    let notif_app = video_app_name.clone();
+                                    let handle_notif = app_handle_clone.clone();
                                     std::thread::spawn(move || {
-                                        notify_with_action(video_app_name, app_handle_clone);
+                                        send_native_notification(notif_app, handle_notif);
                                     });
+
+                                    // 2. Aussi émettre l'événement in-app (bannière si l'app est au premier plan)
+                                    if let Some(handle) = &app_handle_clone {
+                                        let payload = video_app_name.unwrap_or_default();
+                                        let _ = handle.emit_all("mic-activity-detected", payload);
+                                    }
 
                                     last_notif.store(now_sys, Ordering::SeqCst);
                                     *guard = None; // reset pour éviter le spam
@@ -238,6 +257,35 @@ fn compute_rms_i16(data: &[i16]) -> f32 {
     (sum / data.len() as f32).sqrt()
 }
 
+/// Envoie une notification native macOS via UNUserNotificationCenter (non-bloquante).
+/// Clic "Enregistrer" → callback Rust notification_record_callback → compact + start.
+#[cfg(target_os = "macos")]
+fn send_native_notification(
+    video_app: Option<String>,
+    _app_handle: Option<tauri::AppHandle>,
+) {
+    let app_name = video_app
+        .as_deref()
+        .unwrap_or("une application")
+        .to_string();
+
+    extern "C" {
+        fn send_meeting_notification(app_name: *const std::os::raw::c_char);
+    }
+    use std::ffi::CString;
+    if let Ok(cname) = CString::new(app_name.as_str()) {
+        unsafe { send_meeting_notification(cname.as_ptr()); }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn send_native_notification(
+    _video_app: Option<String>,
+    _app_handle: Option<tauri::AppHandle>,
+) {
+    // Sur Linux/Windows : pas d'implémentation osascript, rien à faire
+}
+
 fn compute_rms_u16(data: &[u16]) -> f32 {
     if data.is_empty() { return 0.0; }
     let sum: f32 = data.iter().map(|&x| {
@@ -247,73 +295,5 @@ fn compute_rms_u16(data: &[u16]) -> f32 {
     (sum / data.len() as f32).sqrt()
 }
 
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
-}
 
-/// Envoie une notification interactive via osascript (macOS uniquement).
-/// Si l'utilisateur clique "Enregistrer", on émet un event Tauri vers le frontend.
-fn notify_with_action(video_app: Option<String>, app_handle: Option<tauri::AppHandle>) {
-    #[cfg(target_os = "macos")]
-    {
-        let (dialog_title, msg) = if let Some(ref name) = video_app {
-            (
-                format!("Gilbert — Réunion {} détectée", capitalize(name)),
-                format!("{} est actif. Enregistrer cette réunion avec Gilbert ?", capitalize(name)),
-            )
-        } else {
-            (
-                "Gilbert — Micro actif".to_string(),
-                "Votre micro est actif. Démarrer un enregistrement ?".to_string(),
-            )
-        };
-        let script = format!(
-            r#"display dialog "{}" with title "{}" buttons {{"Ignorer", "Enregistrer"}} default button "Enregistrer" with icon note giving up after 20"#,
-            msg, dialog_title
-        );
-        let output = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if stdout.contains("Enregistrer") {
-                println!("✅ [MicMonitor] Utilisateur a cliqué Enregistrer → event tray-start-recording");
-                // Émettre un event Tauri pour que le frontend démarre l'enregistrement
-                if let Some(handle) = app_handle {
-                    let _ = handle.emit_all("tray-start-recording", ());
-                    // Afficher la fenêtre principale
-                    if let Some(window) = handle.get_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = window.unminimize();
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        // Sur Windows/Linux : notification simple sans bouton
-        use tauri::api::notification::Notification;
-        let (title, body) = if let Some(ref name) = video_app {
-            (
-                format!("Gilbert — Réunion {}", capitalize(name)),
-                format!("{} actif — Ouvrez Gilbert pour enregistrer", capitalize(name)),
-            )
-        } else {
-            (
-                "Gilbert — Micro actif".to_string(),
-                "Ouvrez Gilbert pour démarrer un enregistrement".to_string(),
-            )
-        };
-        let _ = Notification::new("com.gilbert.desktop")
-            .title(&title)
-            .body(&body)
-            .show();
-    }
-}
+

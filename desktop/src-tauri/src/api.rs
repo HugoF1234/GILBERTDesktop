@@ -256,7 +256,7 @@ impl ApiClient {
             .header("X-Device-ID", &self.device_id)
             .header("X-Device-Model", &device_model)
             .header("X-App-Version", APP_VERSION)
-            .header("User-Agent", format!("GilbertDesktop/{}", APP_VERSION));
+            .header("User-Agent", format!("Gilbert/{}", APP_VERSION));
 
         let token_to_use = token.or_else(|| self.token.clone());
         if let Some(t) = &token_to_use {

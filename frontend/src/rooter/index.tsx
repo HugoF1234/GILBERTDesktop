@@ -67,12 +67,19 @@ const AuthFormWrapper = () => {
   const location = useLocation();
   
   const handleAuthSuccess = () => {
-    // Vérifier que le token est bien stocké avant de naviguer
+    // Dans Tauri : rechargement complet pour garantir une initialisation propre
+    // (son système, compact mode, tous les hooks se réinitialisent correctement)
+    if ((window as any).__TAURI__) {
+      sessionStorage.removeItem('gilbert_app_session');
+      window.location.replace('/');
+      return;
+    }
+
+    // Web : navigation interne React (pas de rechargement)
     const token = localStorage.getItem('auth_token');
     const from = (location.state as any)?.from?.pathname || '/';
 
     if (!token) {
-      // Attendre un peu et réessayer (cas rare où le localStorage n'est pas encore flushé)
       setTimeout(() => {
         const retryToken = localStorage.getItem('auth_token');
         if (retryToken) {
@@ -84,8 +91,6 @@ const AuthFormWrapper = () => {
       return;
     }
     
-    // Navigation interne React — PAS de window.location.href pour éviter un rechargement
-    // complet qui re-déclenche le cold start et vide le token qu'on vient de stocker.
     navigate(from, { replace: true });
   };
   

@@ -179,11 +179,49 @@ export async function loginUser(params: LoginParams): Promise<AuthResponse> {
   }
 }
 
+const USER_CACHE_KEY = 'gilbert_user_cache';
+
+/**
+ * Sauvegarde le profil utilisateur pour affichage offline
+ */
+export function cacheUserForOffline(user: User): void {
+  try {
+    localStorage.setItem(USER_CACHE_KEY, JSON.stringify({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      name: user.name,
+      _cachedAt: Date.now(),
+    }));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Récupère le profil utilisateur en cache (pour mode offline)
+ */
+export function getCachedUser(): User | null {
+  try {
+    const raw = localStorage.getItem(USER_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return {
+      id: parsed.id,
+      username: parsed.username ?? parsed.email,
+      email: parsed.email,
+      name: parsed.name,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Get the current user's profile
  */
 export async function getUserProfile(): Promise<User> {
-  return apiClient.get<User>('/auth/me');
+  const user = await apiClient.get<User>('/auth/me');
+  cacheUserForOffline(user);
+  return user;
 }
 
 /**
@@ -194,6 +232,8 @@ export function logoutUser(): void {
   localStorage.removeItem('auth_token');
   localStorage.removeItem('token_issued_at');
   localStorage.removeItem('token_expires_in');
+  localStorage.removeItem(USER_CACHE_KEY);
+  localStorage.removeItem('gilbert_profile_cache');
   // Purger le cache des meetings au logout
   try {
     localStorage.removeItem('meeting-transcriber-meetings-cache');
@@ -339,16 +379,51 @@ function _invalidateCache(): void {
 
 /**
  * Initiate Google OAuth login
+ *
+ * Dans Tauri : démarre un serveur HTTP local, ouvre l'URL OAuth dans le navigateur
+ * SYSTÈME (pas dans le WebView) pour éviter que la web app s'affiche à l'intérieur
+ * de l'app desktop. Le backend redirige vers http://localhost:PORT/callback?token=JWT
+ * que le serveur local intercepte → émet l'événement Tauri "oauth-callback".
+ *
+ * Dans le navigateur web : redirection normale dans le même onglet.
  */
 export async function initiateGoogleLogin(): Promise<void> {
   try {
-    // Redirection directe vers l'endpoint backend Google OAuth
-    // Le backend va automatiquement rediriger vers Google OAuth
     const backendUrl = import.meta.env.VITE_API_BASE_URL || 'https://gilbert-assistant.ovh';
-    const googleAuthUrl = `${backendUrl}/auth/google`;
 
-    // Redirection directe vers le backend qui gère OAuth
-    window.location.href = googleAuthUrl;
+    if (_isTauri()) {
+      const tauri = (window as any).__TAURI__;
+
+      // Étape 1 : démarrer le serveur HTTP local et récupérer le port
+      const invoke = tauri?.tauri?.invoke || tauri?.core?.invoke;
+      let port: number | null = null;
+      if (invoke) {
+        try {
+          port = await invoke('start_oauth_listener') as number;
+          console.log('[OAuth] Serveur local démarré sur port', port);
+        } catch (e) {
+          console.warn('[OAuth] Impossible de démarrer le serveur local:', e);
+        }
+      }
+
+      // Étape 2 : ouvrir l'URL OAuth dans le navigateur système
+      // Si on a un port, on passe desktop_port pour que le backend redirige vers localhost
+      const googleAuthUrl = port
+        ? `${backendUrl}/auth/google?desktop_port=${port}`
+        : `${backendUrl}/auth/google`;
+
+      // shell.open via l'API Tauri
+      const shellOpen = tauri?.shell?.open;
+      if (shellOpen) {
+        await shellOpen(googleAuthUrl);
+      } else {
+        // Fallback : navigation dans le WebView (moins idéal mais fonctionnel)
+        window.location.href = googleAuthUrl;
+      }
+    } else {
+      // Web : redirection normale dans le même onglet
+      window.location.href = `${backendUrl}/auth/google`;
+    }
   } catch (error) {
     throw new Error('Impossible d\'initier la connexion Google. Veuillez réessayer.');
   }

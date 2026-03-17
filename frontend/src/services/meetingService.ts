@@ -101,6 +101,8 @@ export async function uploadMeeting(
       response = await new Promise<Meeting>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', endpoint, true);
+        // Timeout généreux pour les gros fichiers (1h d'audio ≈ 200-500Mo)
+        xhr.timeout = 30 * 60 * 1000; // 30 minutes
         if (token) {
           xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         }
@@ -145,6 +147,10 @@ export async function uploadMeeting(
         xhr.onerror = () => {
           clearInterval(progressInterval);
           reject(new Error('Network error during upload'));
+        };
+        xhr.ontimeout = () => {
+          clearInterval(progressInterval);
+          reject(new Error('Upload timeout — le fichier est trop volumineux ou la connexion est trop lente'));
         };
         xhr.onreadystatechange = () => {
           if (xhr.readyState === 4) {

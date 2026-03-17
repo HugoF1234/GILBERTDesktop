@@ -476,6 +476,12 @@ const AuthForm: React.FC<AuthFormProps> = ({
 
     try {
       await initiateGoogleLogin();
+      // Dans Tauri : l'URL s'ouvre dans le navigateur système
+      // Le listener dans main.tsx recevra le token et rechargera l'app automatiquement
+      // On ajoute un timeout de sécurité : si après 3 min toujours rien, débloquer le bouton
+      if ((window as any).__TAURI__) {
+        setTimeout(() => setIsLoading(false), 3 * 60 * 1000);
+      }
     } catch (err: any) {
       setError(err?.message || 'Erreur de connexion avec Google');
       setIsLoading(false);
@@ -753,7 +759,9 @@ const AuthForm: React.FC<AuthFormProps> = ({
         disabled={isLoading}
       >
         <GoogleIcon />
-        <span className="ml-2">Continuer avec Google</span>
+        <span className="ml-2">
+          {isLoading && (window as any).__TAURI__ ? 'En attente du navigateur...' : 'Continuer avec Google'}
+        </span>
       </Button>
 
       <p className="mt-8 text-center text-sm text-slate-500">

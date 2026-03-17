@@ -924,7 +924,12 @@ function ProfilePage(): JSX.Element {
             type="button"
             onClick={() => {
               logoutUser();
-              navigate('/auth');
+              if ((window as any).__TAURI__) {
+                sessionStorage.removeItem('gilbert_app_session');
+                window.location.replace('/');
+              } else {
+                navigate('/auth');
+              }
             }}
             className="inline-flex items-center gap-2 px-4 sm:px-6 py-2 sm:py-3 text-xs sm:text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors"
           >

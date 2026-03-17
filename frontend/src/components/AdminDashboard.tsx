@@ -1474,7 +1474,7 @@ const AdminDashboard: React.FC = () => {
                                     )}
                                   >
                                     <p className="font-semibold text-slate-900">Gilbert Pro</p>
-                                    <p className="text-sm text-slate-600">19,96€/mois</p>
+                                    <p className="text-sm text-slate-600">24,90€/mois</p>
                                   </button>
                                   <button
                                     type="button"
@@ -1490,8 +1490,8 @@ const AdminDashboard: React.FC = () => {
                                     )}
                                   >
                                     <p className="font-semibold text-slate-900">Gilbert Pro</p>
-                                    <p className="text-sm text-slate-600">199,60€/an</p>
-                                    <p className="text-xs text-emerald-600">-17%</p>
+                                    <p className="text-sm text-slate-600">19,90€/mois</p>
+                                    <p className="text-xs text-emerald-600">-20%</p>
                                   </button>
                                   <button
                                     type="button"
@@ -2387,7 +2387,7 @@ Utilisez @nom, @prenom, @email, @plan, @date, @heure, @annee pour personnaliser 
                   )}
                 >
                   <p className="text-sm font-medium">Pro Mensuel</p>
-                  <p className="text-xs text-slate-500">19,96€/mois</p>
+                  <p className="text-xs text-slate-500">24,90€/mois</p>
                 </button>
                 <button
                   onClick={() => setSubscriptionPlan('gilbert_plus_yearly')}
@@ -2398,8 +2398,8 @@ Utilisez @nom, @prenom, @email, @plan, @date, @heure, @annee pour personnaliser 
                       : "border-slate-200 bg-white hover:border-slate-300"
                   )}
                 >
-                  <p className="text-sm font-medium">Pro Annuel</p>
-                  <p className="text-xs text-slate-500">199,60€/an</p>
+                  <p className="text-sm font-medium">Pro Annuel (12 mois)</p>
+                  <p className="text-xs text-slate-500">19,90€/mois</p>
                 </button>
                 <button
                   onClick={() => setSubscriptionPlan('enterprise')}
