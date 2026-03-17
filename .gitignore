@@ -16,3 +16,6 @@ desktop/src-tauri/icons/ios/
 
 # Logs
 *.log
+
+# Backend (non inclus dans le repo Desktop — GILBERT-main séparé)
+backend/
