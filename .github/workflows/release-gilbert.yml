@@ -133,9 +133,31 @@ jobs:
           # ÉTAPE 4 : Vérifier la signature (fail le CI si cassée)
           codesign --verify --deep --strict --verbose=2 "$APP" && echo "✅ Vérification signature OK"
 
-          # ÉTAPE 5 : Créer le DMG esthétique avec hdiutil
-          # Apple recommande de notariser UN SEUL artefact (DMG) pour un download web.
-          # La notarisation du DMG valide le contenu entier (app incluse).
+          # ÉTAPE 5 : Notariser et stapler l'APP (OBLIGATOIRE)
+          # L'app doit avoir son ticket pour que Gatekeeper l'accepte au lancement
+          # (copie depuis DMG vers Applications = l'app doit avoir le staple)
+          ditto -c -k --keepParent "$APP" /tmp/Gilbert.zip
+          xcrun notarytool submit /tmp/Gilbert.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait 2>&1 | tee /tmp/notary_result.txt
+
+          if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
+            SUBMISSION_ID=$(grep "  id:" /tmp/notary_result.txt | head -1 | awk '{print $2}')
+            echo "❌ Notarisation app échouée — log détaillé :"
+            [ -n "$SUBMISSION_ID" ] && xcrun notarytool log "$SUBMISSION_ID" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" || true
+            exit 1
+          fi
+          echo "✅ Notarisation app acceptée"
+          rm /tmp/Gilbert.zip
+          xcrun stapler staple "$APP"
+          echo "✅ App staplée"
+
+          # ÉTAPE 6 : Créer le DMG esthétique avec hdiutil (app staplée à l'intérieur)
           rm -f "$DMG"
           DMG_TMP="/tmp/Gilbert_tmp.dmg"
           BACKGROUND="desktop/src-tauri/icons/dmg-background.png"
@@ -174,13 +196,13 @@ jobs:
           rm -f "$DMG_TMP"
           echo "✅ DMG compressé créé"
 
-          # ÉTAPE 6 : Signer le DMG UDZO final
+          # ÉTAPE 8 : Signer le DMG UDZO final
           # hdiutil convert recrée le fichier entièrement → signer APRÈS la conversion
           codesign --force --timestamp --sign "$IDENTITY" "$DMG"
           echo "✅ DMG signé"
           codesign -dv "$DMG" 2>&1 | grep -E "Authority|Timestamp"
 
-          # ÉTAPE 7 : Notariser le DMG signé (seul artefact notarisé — recommandation Apple)
+          # ÉTAPE 9 : Notariser le DMG signé
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
