@@ -815,9 +815,12 @@ fn update_recording_indicators(app_handle: &tauri::AppHandle, recording: bool) {
             .spawn();
     }
 
-    // Titre à côté de l'icône dans la barre de menu macOS
-    let tray_title = if recording { "● REC" } else { "" };
-    let _ = app_handle.tray_handle().set_title(tray_title);
+    // Titre à côté de l'icône dans la barre de menu macOS (set_title n'existe que sur macOS)
+    #[cfg(target_os = "macos")]
+    {
+        let tray_title = if recording { "● REC" } else { "" };
+        let _ = app_handle.tray_handle().set_title(tray_title);
+    }
 }
 
 /// Crée le menu du system tray
