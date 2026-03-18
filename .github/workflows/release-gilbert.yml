@@ -249,8 +249,8 @@ jobs:
           INSTALLER_IDENTITY="${APPLE_INSTALLER_IDENTITY:-Developer ID Installer: Mathis Escriva (2U6L38DLSW)}"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain"
           echo "Recherche du certificat Installer dans le trousseau..."
-          security find-identity -v -p codesign "$KEYCHAIN_PATH" | grep -E "Developer ID|1\)" || true
-          if security find-identity -v -p codesign "$KEYCHAIN_PATH" | grep -q "Developer ID Installer"; then
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>&1 || true
+          if security find-identity -v -p codesigning "$KEYCHAIN_PATH" 2>/dev/null | grep -q "Developer ID Installer"; then
             productbuild --component "$APP" /Applications "$PKG"
             codesign --force --timestamp --sign "$INSTALLER_IDENTITY" "$PKG"
             xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID" --wait 2>&1 | tee /tmp/notary_pkg_result.txt
