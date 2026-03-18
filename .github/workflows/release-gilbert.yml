@@ -61,13 +61,14 @@ jobs:
           security find-identity -v -p codesign "$KEYCHAIN_PATH" | head -5
 
       - name: Build Tauri (Apple Silicon)
-        run: npm run tauri build -- --target aarch64-apple-darwin
+        # --bundles app,dmg : exclut le bundle updater pour éviter l'erreur "Invalid symbol 10"
+        # (TAURI_PRIVATE_KEY avec retours à la ligne dans GitHub Secrets). Les artefacts updater
+        # sont créés et signés dans l'étape "Create updater" à partir de l'app signée.
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles app,dmg
         working-directory: desktop
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Mathis Escriva (2U6L38DLSW)"
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Fix Info.plist CFBundleExecutable
         run: |
