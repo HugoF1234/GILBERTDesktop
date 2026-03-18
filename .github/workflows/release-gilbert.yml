@@ -232,6 +232,7 @@ jobs:
 
       - name: Create updater .app.tar.gz from signed app
         id: create-updater
+        continue-on-error: true
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
@@ -308,6 +309,7 @@ jobs:
 
       - name: Create updater .msi.zip from MSI
         id: create-updater-win
+        continue-on-error: true
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
