@@ -230,11 +230,16 @@ jobs:
           echo "✅ Pipeline terminé"
 
       - name: Create updater .app.tar.gz from signed app
-        if: ${{ secrets.TAURI_PRIVATE_KEY != '' }}
+        id: create-updater
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         run: |
+          if [ -z "$TAURI_PRIVATE_KEY" ]; then
+            echo "created=false" >> $GITHUB_OUTPUT
+            echo "⏭️ TAURI_PRIVATE_KEY non configuré — skip artefacts updater"
+            exit 0
+          fi
           MACOS_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
           APP="$MACOS_DIR/Gilbert.app"
           cd "$MACOS_DIR"
@@ -242,6 +247,7 @@ jobs:
           tar -czf Gilbert.app.tar.gz Gilbert.app
           cd -
           cd desktop && npx tauri signer sign src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app.tar.gz
+          echo "created=true" >> $GITHUB_OUTPUT
           echo "✅ Updater .app.tar.gz créé et signé"
 
       - name: Upload macOS artifacts (DMG)
@@ -251,7 +257,7 @@ jobs:
           path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
 
       - name: Upload macOS updater artifacts
-        if: ${{ secrets.TAURI_PRIVATE_KEY != '' }}
+        if: steps.create-updater.outputs.created == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-macOS-updater
