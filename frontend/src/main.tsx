@@ -115,6 +115,13 @@ if (isTauriEnv) {
 // Resume token auto-refresh if user is already logged in
 initTokenRefresh();
 
+// Vérification des mises à jour (Tauri uniquement, non bloquant)
+if (isTauriEnv) {
+  import('./services/updaterService').then(({ checkForUpdates }) => {
+    checkForUpdates();
+  }).catch(() => {});
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>

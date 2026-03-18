@@ -53,6 +53,7 @@ import {
 import { useRouteContext } from '../hooks/useRouteContext';
 import { useDataStore } from '../stores/dataStore';
 import { logger } from '@/utils/logger';
+import { toUserFriendlyMessage } from '@/utils/errorMessages';
 
 interface DashboardProps {
   user?: User | null;
@@ -1066,11 +1067,7 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
       
     } catch (error) {
       logger.error('Error during recording upload:', error);
-      let errorMessage = "Une erreur est survenue pendant l'upload de l'enregistrement.";
-      
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      }
+      const errorMessage = toUserFriendlyMessage(error);
 
       // ===== PHASE 2: Marquer comme échoué dans IndexedDB =====
       const uuid = recordingManager.getCurrentRecordingUuid();
@@ -1294,11 +1291,7 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
       
     } catch (error) {
       logger.error('Error during upload/transcription:', error);
-      let errorMessage = "Une erreur est survenue pendant l'upload ou la transcription.";
-      
-      if (error instanceof Error) {
-        errorMessage = error.message;
-      }
+      const errorMessage = toUserFriendlyMessage(error);
       
       showSuccessPopup(
         "Erreur",
@@ -2797,7 +2790,7 @@ const Dashboard: React.FC<DashboardProps> = (props) => {
 
           {errorState?.message && (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, fontStyle: 'italic' }}>
-              Détails techniques : {errorState.message}
+              {errorState.message}
             </Typography>
           )}
         </DialogContent>

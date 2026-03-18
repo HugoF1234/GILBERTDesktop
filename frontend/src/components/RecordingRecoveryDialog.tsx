@@ -28,6 +28,7 @@ import {
 import { recordingStorage } from '../services/recordingStorage';
 import { uploadMeeting } from '../services/meetingService';
 import { logger } from '@/utils/logger';
+import { toUserFriendlyMessage } from '@/utils/errorMessages';
 
 interface RecordingRecoveryDialogProps {
   open: boolean;
@@ -137,7 +138,7 @@ const RecordingRecoveryDialog: React.FC<RecordingRecoveryDialogProps> = ({
     } catch (error) {
       logger.error(`❌ Erreur upload enregistrement ${recording.uuid}:`, error);
       await recordingStorage.updateUploadStatus(recording.uuid, 'failed');
-      alert(`Échec de l'upload: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
+      alert(`Échec de l'upload: ${toUserFriendlyMessage(error)}`);
     } finally {
       setUploadingUuid(null);
     }

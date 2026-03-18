@@ -15,6 +15,7 @@ import { getPendingRecordingsForRecovery, getPendingTauriJobs } from '@/utils/re
 import { tauriRetryJob, tauriDeleteJob } from '@/services/tauriRecordingService';
 import type { TauriJob } from '@/services/tauriRecordingService';
 import { logger } from '@/utils/logger';
+import { toUserFriendlyMessage } from '@/utils/errorMessages';
 
 interface RecordingRecoveryOverlayProps {
   open: boolean;
@@ -90,7 +91,7 @@ export default function RecordingRecoveryOverlay({
     } catch (error) {
       logger.error(`❌ Erreur upload enregistrement ${recording.uuid}:`, error);
       await recordingStorage.updateUploadStatus(recording.uuid, 'failed');
-      alert(`Échec de l'upload: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
+      alert(`Échec de l'upload: ${toUserFriendlyMessage(error)}`);
     } finally {
       setUploadingUuid(null);
     }
@@ -132,7 +133,7 @@ export default function RecordingRecoveryOverlay({
       }
     } catch (error) {
       logger.error('Erreur retry job:', error);
-      alert(`Échec retry: ${error instanceof Error ? error.message : 'Erreur inconnue'}`);
+      alert(`Échec de la récupération: ${toUserFriendlyMessage(error)}`);
     } finally {
       setRetryingJobId(null);
     }

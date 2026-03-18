@@ -57,6 +57,8 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           rm /tmp/certificate.p12
+          echo "Identités disponibles pour codesign :"
+          security find-identity -v -p codesign "$KEYCHAIN_PATH" | head -5
 
       - name: Build Tauri (Apple Silicon)
         run: npm run tauri build -- --target aarch64-apple-darwin
@@ -64,6 +66,8 @@ jobs:
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Mathis Escriva (2U6L38DLSW)"
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
       - name: Fix Info.plist CFBundleExecutable
         run: |
@@ -79,7 +83,8 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: 2U6L38DLSW
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '2U6L38DLSW' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || 'Developer ID Application: Mathis Escriva (2U6L38DLSW)' }}
         run: |
           APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
           DMG_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
@@ -89,7 +94,7 @@ jobs:
             exit 1
           fi
           echo "DMG à signer: $DMG"
-          IDENTITY="Developer ID Application: Mathis Escriva (2U6L38DLSW)"
+          IDENTITY="$APPLE_SIGNING_IDENTITY"
           ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
           # ÉTAPE 1 : Signer tous les composants internes (de l'intérieur vers l'extérieur)
@@ -160,8 +165,6 @@ jobs:
           # ÉTAPE 6 : Créer le DMG esthétique avec hdiutil (app staplée à l'intérieur)
           rm -f "$DMG"
           DMG_TMP="/tmp/Gilbert_tmp.dmg"
-          BACKGROUND="desktop/src-tauri/icons/dmg-background.png"
-
           # Créer un DMG temporaire en lecture-écriture pour le personnaliser
           mkdir -p /tmp/dmg-content
           cp -R "$APP" /tmp/dmg-content/
@@ -178,9 +181,12 @@ jobs:
           echo "Monté sur: $MOUNT_DIR"
           sleep 2
 
-          # Copier le fond dans le DMG
-          mkdir -p "$MOUNT_DIR/.background"
-          cp "$BACKGROUND" "$MOUNT_DIR/.background/background.png"
+          # Copier le fond dans le DMG (optionnel)
+          BACKGROUND="desktop/src-tauri/icons/dmg-background.png"
+          if [ -f "$BACKGROUND" ]; then
+            mkdir -p "$MOUNT_DIR/.background"
+            cp "$BACKGROUND" "$MOUNT_DIR/.background/background.png"
+          fi
 
           # Appliquer le fond via AppleScript (optionnel si le fichier existe)
           if [ -f desktop/setup_dmg.applescript ]; then
@@ -222,11 +228,35 @@ jobs:
           fi
           echo "✅ Pipeline terminé"
 
-      - name: Upload .dmg
+      - name: Create updater .app.tar.gz from signed app
+        if: ${{ secrets.TAURI_PRIVATE_KEY != '' }}
+        env:
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          MACOS_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          APP="$MACOS_DIR/Gilbert.app"
+          cd "$MACOS_DIR"
+          rm -f Gilbert.app.tar.gz Gilbert.app.tar.gz.sig
+          tar -czf Gilbert.app.tar.gz Gilbert.app
+          cd -
+          cd desktop && npx tauri signer sign src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app.tar.gz
+          echo "✅ Updater .app.tar.gz créé et signé"
+
+      - name: Upload macOS artifacts (DMG)
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-macOS-arm64
           path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+
+      - name: Upload macOS updater artifacts
+        if: ${{ secrets.TAURI_PRIVATE_KEY != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Gilbert-macOS-updater
+          path: |
+            desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app.tar.gz
+            desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app.tar.gz.sig
 
   # ─────────────────────────────────────────────────────────────
   # Windows — .msi
@@ -264,12 +294,17 @@ jobs:
         working-directory: desktop
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
-      - name: Upload .msi
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-Windows
-          path: desktop/src-tauri/target/release/bundle/msi/*.msi
+          path: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/msi/*.zip
+            desktop/src-tauri/target/release/bundle/msi/*.sig
 
   # ─────────────────────────────────────────────────────────────
   # Linux — .AppImage
@@ -317,8 +352,41 @@ jobs:
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            # workflow_dispatch : utiliser la version du package pour un tag cohérent
+            VERSION=$(node -e "const c=require('./desktop/src-tauri/tauri.conf.json'); console.log(c.package.version)")
+            echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
           fi
+
+      - name: Create latest.json for auto-update
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if [[ "$TAG" == "latest" ]]; then
+            TAG="v$(node -e "const c=require('./desktop/src-tauri/tauri.conf.json'); console.log(c.package.version)")"
+          fi
+          VERSION="${TAG#v}"
+          REPO="https://github.com/HugoF1234/GILBERTDesktop/releases/download/$TAG"
+
+          MACOS_SIG=""
+          WIN_SIG=""
+          [ -f "artifacts/Gilbert-macOS-updater/Gilbert.app.tar.gz.sig" ] && MACOS_SIG=$(cat "artifacts/Gilbert-macOS-updater/Gilbert.app.tar.gz.sig")
+          WIN_SIG_FILE=$(find artifacts/Gilbert-Windows -name "*.msi.zip.sig" 2>/dev/null | head -1)
+          [ -n "$WIN_SIG_FILE" ] && WIN_SIG=$(cat "$WIN_SIG_FILE")
+
+          WIN_ZIP=$(find artifacts/Gilbert-Windows -name "*.msi.zip" 2>/dev/null | head -1)
+          WIN_FILENAME=$(basename "$WIN_ZIP" 2>/dev/null || echo "Gilbert.msi.zip")
+
+          # Construire le JSON (ne pas inclure les plateformes sans signature)
+          PLATFORMS="{}"
+          if [ -n "$MACOS_SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg sig "$MACOS_SIG" --arg url "$REPO/Gilbert.app.tar.gz" '. + {"darwin-aarch64": {"signature": $sig, "url": $url}}')
+          fi
+          if [ -n "$WIN_SIG" ]; then
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg sig "$WIN_SIG" --arg url "$REPO/$WIN_FILENAME" '. + {"windows-x86_64": {"signature": $sig, "url": $url}}')
+          fi
+
+          echo "{\"version\": \"$VERSION\", \"notes\": \"Gilbert Desktop $VERSION\", \"pub_date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"platforms\": $PLATFORMS}" > artifacts/latest.json
+
+          cat artifacts/latest.json
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -352,3 +420,6 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.msi
             artifacts/**/*.AppImage
+            artifacts/**/*.json
+            artifacts/**/*.tar.gz
+            artifacts/**/*.sig

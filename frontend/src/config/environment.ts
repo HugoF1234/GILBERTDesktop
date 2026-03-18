@@ -8,7 +8,7 @@ export const config = {
   
   // Autres configurations
   APP_NAME: 'Gilbert',
-  APP_VERSION: '1.0.0',
+  APP_VERSION: '1.3.1',
 };
 
 export default config; 

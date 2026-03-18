@@ -9,6 +9,13 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Charger les clés Tauri updater (TAURI_PRIVATE_KEY, TAURI_KEY_PASSWORD) si .env.tauri existe
+if [ -f "$SCRIPT_DIR/.env.tauri" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env.tauri"
+    set +a
+fi
 DEST="$HOME/Documents/Lexia/Gilbert/DESK"
 BUNDLE_ID="com.gilbert.desktop"
 APP_NAME="Gilbert"

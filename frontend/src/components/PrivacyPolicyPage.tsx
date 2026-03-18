@@ -137,6 +137,18 @@ const PrivacyPolicyPage: React.FC = () => {
                   <p className="mt-4 italic text-gray-600">
                     Remarque : le Service peut segmenter les intervenants (diarisation) selon les caractéristiques audio ; il ne constitue pas un système d'identification biométrique et n'a pas vocation à authentifier des personnes. (Le nommage des intervenants peut dépendre de l'utilisateur ou de paramètres métier.)
                   </p>
+                  <h3 className="text-xl font-semibold text-gray-900 mb-3 mt-4">3.4 Application desktop (stockage local)</h3>
+                  <p>
+                    L'application Gilbert Desktop peut stocker temporairement sur votre appareil (via IndexedDB et stockage local du navigateur) :
+                  </p>
+                  <ul className="list-disc pl-6 space-y-2 mt-2">
+                    <li>les enregistrements en attente d'upload (en cas de perte de connexion),</li>
+                    <li>les métadonnées associées (titre, statut),</li>
+                    <li>le token d'authentification et les préférences de session.</li>
+                  </ul>
+                  <p className="mt-2">
+                    Ces données restent sur votre appareil jusqu'à l'upload réussi ou la suppression manuelle. Elles ne sont pas transmises à nos serveurs tant que la connexion n'est pas rétablie et que vous n'avez pas lancé l'upload.
+                  </p>
                 </section>
 
                 <section>

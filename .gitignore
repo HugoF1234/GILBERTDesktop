@@ -19,3 +19,6 @@ desktop/src-tauri/icons/ios/
 
 # Backend (non inclus dans le repo Desktop — GILBERT-main séparé)
 backend/
+
+# Clés Tauri updater (ne jamais committer)
+desktop/.env.tauri

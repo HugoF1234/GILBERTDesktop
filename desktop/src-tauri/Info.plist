@@ -19,7 +19,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>1.3.1</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -28,13 +28,13 @@
     <true/>
 
     <key>NSMicrophoneUsageDescription</key>
-    <string>Gilbert needs microphone access to record your voice during meetings.</string>
+    <string>Gilbert a besoin de l'accès au microphone pour enregistrer votre voix pendant les réunions.</string>
 
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Gilbert needs Screen Recording permission to capture system audio from video conferencing apps (Zoom, Meet, Teams, etc.). No video is captured, only audio.</string>
+    <string>Gilbert a besoin de l'autorisation de capture d'écran pour enregistrer le son des applications de visioconférence (Zoom, Meet, Teams, etc.). Aucune vidéo n'est capturée, uniquement l'audio.</string>
 
     <key>NSAudioCaptureUsageDescription</key>
-    <string>Gilbert needs audio access to record meeting audio.</string>
+    <string>Gilbert a besoin de l'accès audio pour enregistrer vos réunions.</string>
 
     <key>NSAppTransportSecurity</key>
     <dict>

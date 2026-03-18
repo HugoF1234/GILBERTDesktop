@@ -24,6 +24,7 @@ import SaveValidation from '@/components/ui/SaveValidation';
 import DiscardValidation from '@/components/ui/DiscardValidation';
 import { useRouteContext } from '@/hooks/useRouteContext';
 import { logger } from '@/utils/logger';
+import { toUserFriendlyMessage } from '@/utils/errorMessages';
 import {
   isTauriApp,
   tauriStartRecording,
@@ -765,7 +766,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
       update();
     } catch (err: any) {
       logger.error('Erreur lors de la demande d\'accès au microphone:', err);
-      setError(err.message || 'Erreur microphone');
+      setError(toUserFriendlyMessage(err));
     }
   }, [selectedDevice]);
 
@@ -871,7 +872,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
         return;
       } catch (err: any) {
         logger.error('❌ Erreur démarrage Tauri:', err);
-        setError(err.message || 'Erreur lors du démarrage de l\'enregistrement desktop');
+        setError(toUserFriendlyMessage(err));
         return;
       }
     }
@@ -914,7 +915,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
       });
 
       if (!result.success) {
-        setError(result.error ?? 'Erreur');
+        setError(toUserFriendlyMessage(new Error(result.error ?? 'Erreur')));
         stopViz();
         return;
       }
@@ -930,7 +931,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
       setRecordingState('recording');
     } catch (err: any) {
       logger.error('Erreur lors du démarrage de l\'enregistrement:', err);
-      setError(err.message || 'Erreur lors du démarrage de l\'enregistrement');
+      setError(toUserFriendlyMessage(err));
       stopViz();
     }
   }, [startViz, stopViz, isQuotaExceeded, title, setRecordingDuration, setRecordingState]);
@@ -1164,7 +1165,7 @@ export function ImmersiveRecordingPage(): JSX.Element {
         setRecordingDuration(0);
       } else {
         // Pour les autres erreurs, garder le dialog ouvert pour réessayer
-        setError(err?.message || 'Erreur upload - L\'enregistrement a été sauvegardé localement et pourra être uploadé plus tard');
+        setError(toUserFriendlyMessage(err) + ' L\'enregistrement a été sauvegardé localement et pourra être uploadé plus tard.');
       }
     } finally {
       setIsUploading(false);

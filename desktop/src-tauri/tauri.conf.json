@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "Gilbert",
-    "version": "0.2.0"
+    "version": "1.3.1"
   },
   "tauri": {
     "bundle": {
@@ -43,7 +43,7 @@
     ],
     "macOSPrivateApi": true,
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://gilbert-assistant.ovh https://api.gilbert-assistant.ovh wss: ws:; media-src 'self' blob:;"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://gilbert-assistant.ovh https://api.gilbert-assistant.ovh https://github.com wss: ws:; media-src 'self' blob:;"
     },
     "allowlist": {
       "all": false,
@@ -75,7 +75,7 @@
       "http": {
         "all": true,
         "request": true,
-        "scope": ["https://gilbert-assistant.ovh/*", "https://api.gilbert-assistant.ovh/*"]
+        "scope": ["https://gilbert-assistant.ovh/*", "https://api.gilbert-assistant.ovh/*", "https://github.com/*"]
       },
       "protocol": {
         "all": true,
@@ -87,6 +87,14 @@
       "iconPath": "icons/icon.png",
       "iconAsTemplate": true,
       "menuOnLeftClick": false
+    },
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/HugoF1234/GILBERTDesktop/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3NENBRjAwMTJGOUQ4QUUKUldTdTJQa1NBSzlNWjNiV0F0ODJQSkxiRWhZZXZyWTJCczJuT0FkSlArcitZQmZ2Z09nQnpuSksK"
     }
   }
 }
