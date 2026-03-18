@@ -298,21 +298,43 @@ jobs:
         working-directory: desktop
 
       - name: Build Tauri
-        run: npm run tauri build
+        # --bundles msi : exclut le bundle updater pour éviter "Invalid symbol 10"
+        # (TAURI_PRIVATE_KEY avec retours à la ligne). Les artefacts updater sont
+        # créés et signés dans l'étape "Create updater" ci-dessous.
+        run: npm run tauri build -- --bundles msi
         working-directory: desktop
         env:
           VITE_API_BASE_URL: https://gilbert-assistant.ovh
+
+      - name: Create updater .msi.zip from MSI
+        id: create-updater-win
+        env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:TAURI_PRIVATE_KEY)) {
+            "created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "TAURI_PRIVATE_KEY non configuré — skip artefacts updater Windows"
+            exit 0
+          }
+          $MSI_DIR = "desktop/src-tauri/target/release/bundle/msi"
+          $MSI = Get-ChildItem "$MSI_DIR/*.msi" | Select-Object -First 1
+          if (-not $MSI) {
+            "created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            exit 0
+          }
+          $zipPath = Join-Path $MSI_DIR ($MSI.BaseName + ".zip")
+          Compress-Archive -Path $MSI.FullName -DestinationPath $zipPath -Force
+          Push-Location desktop
+          npx tauri signer sign "src-tauri/target/release/bundle/msi/$($MSI.BaseName).zip"
+          Pop-Location
+          "created=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-Windows
-          path: |
-            desktop/src-tauri/target/release/bundle/msi/*.msi
-            desktop/src-tauri/target/release/bundle/msi/*.zip
-            desktop/src-tauri/target/release/bundle/msi/*.sig
+          path: desktop/src-tauri/target/release/bundle/msi/
 
   # ─────────────────────────────────────────────────────────────
   # Linux — .AppImage
