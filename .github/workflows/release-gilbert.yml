@@ -86,7 +86,19 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_INSTALLER_IDENTITY: ${{ secrets.APPLE_INSTALLER_IDENTITY }}
         run: |
+          # ─── DIAGNOSTIC : vérifier les secrets Apple ───
+          echo "::group::🔍 Diagnostic secrets Apple"
+          echo "APPLE_ID défini: $([ -n \"$APPLE_ID\" ] && echo 'OUI' || echo 'NON')"
+          echo "APPLE_PASSWORD défini: $([ -n \"$APPLE_PASSWORD\" ] && echo 'OUI' || echo 'NON')"
+          echo "APPLE_TEAM_ID défini: $([ -n \"$APPLE_TEAM_ID\" ] && echo 'OUI' || echo 'NON')"
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ]; then
+            echo "::error::APPLE_ID et APPLE_PASSWORD doivent être configurés dans GitHub Secrets pour la notarisation"
+            exit 1
+          fi
+          echo "::endgroup::"
+
           IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: Mathis Escriva (2U6L38DLSW)}"
           TEAM_ID="${APPLE_TEAM_ID:-2U6L38DLSW}"
           APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
@@ -230,6 +242,46 @@ jobs:
           fi
           echo "✅ Pipeline terminé"
 
+          # ÉTAPE 10 : Créer un installateur .pkg (évite souvent le warning Gatekeeper)
+          # L'app installée via .pkg n'hérite généralement pas de la quarantaine
+          # Nécessite le certificat "Developer ID Installer" (voir SECRETS-RELEASE.md)
+          PKG="${DMG%.dmg}.pkg"
+          INSTALLER_IDENTITY="${APPLE_INSTALLER_IDENTITY:-Developer ID Installer: Mathis Escriva (2U6L38DLSW)}"
+          if security find-identity -v -p codesign | grep -q "Developer ID Installer"; then
+            productbuild --component "$APP" /Applications "$PKG"
+            codesign --force --timestamp --sign "$INSTALLER_IDENTITY" "$PKG"
+            xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID" --wait 2>&1 | tee /tmp/notary_pkg_result.txt
+            if grep -q "status: Accepted" /tmp/notary_pkg_result.txt; then
+              xcrun stapler staple "$PKG"
+              echo "✅ PKG notarisé et staplé"
+            else
+              echo "⚠️ Notarisation PKG échouée — on garde le DMG uniquement"
+              rm -f "$PKG"
+            fi
+          else
+            echo "⚠️ Certificat Developer ID Installer non trouvé — PKG non créé (DMG uniquement)"
+          fi
+
+      - name: Diagnostic DMG (vérification notarisation)
+        run: |
+          DMG_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
+          DMG=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
+          echo "::group::🔍 Diagnostic DMG final"
+          echo "Fichier: $DMG"
+          [ -f "$DMG" ] && ls -la "$DMG" || echo "DMG introuvable"
+          if [ -f "$DMG" ]; then
+            echo ""
+            echo "--- codesign -dv ---"
+            codesign -dv --verbose=2 "$DMG" 2>&1 || true
+            echo ""
+            echo "--- stapler validate (doit afficher 'The validate action worked!') ---"
+            xcrun stapler validate "$DMG" 2>&1 || true
+            echo ""
+            echo "--- spctl (Gatekeeper, doit afficher 'accepted') ---"
+            spctl -a -vv -t open "$DMG" 2>&1 || true
+          fi
+          echo "::endgroup::"
+
       - name: Create updater .app.tar.gz from signed app
         id: create-updater
         continue-on-error: true
@@ -252,11 +304,13 @@ jobs:
           echo "created=true" >> $GITHUB_OUTPUT
           echo "✅ Updater .app.tar.gz créé et signé"
 
-      - name: Upload macOS artifacts (DMG)
+      - name: Upload macOS artifacts (DMG + PKG)
         uses: actions/upload-artifact@v4
         with:
           name: Gilbert-macOS-arm64
-          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          path: |
+            desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.pkg
 
       - name: Upload macOS updater artifacts
         if: steps.create-updater.outputs.created == 'true'
@@ -434,14 +488,13 @@ jobs:
 
             | Plateforme | Télécharger | Son système |
             |---|---|---|
-            | macOS Apple Silicon (M1/M2/M3) | `.dmg` | ✅ Oui |
+            | macOS Apple Silicon (M1/M2/M3) | `.pkg` (recommandé) ou `.dmg` | ✅ Oui |
             | Windows 10/11 | `.msi` | Micro uniquement |
             | Linux | ⚠️ Bientôt disponible | - |
 
             ### macOS
-            1. Télécharger le `.dmg`
-            2. Double-cliquer → glisser Gilbert dans Applications
-            3. Ouvrir normalement (app signée et notarisée ✅)
+            **Option recommandée (.pkg)** : Télécharger le `.pkg` → double-cliquer → installer. Pas de warning Gatekeeper.
+            **Option alternative (.dmg)** : Télécharger le `.dmg` → double-cliquer → glisser Gilbert dans Applications. Si warning : clic droit → Ouvrir.
 
             ### Windows
             Double-cliquer sur le `.msi` → si SmartScreen s'affiche : "Informations complémentaires" → "Exécuter quand même"
@@ -452,6 +505,7 @@ jobs:
             ```
           files: |
             artifacts/**/*.dmg
+            artifacts/**/*.pkg
             artifacts/**/*.msi
             artifacts/**/*.AppImage
             artifacts/**/*.json
