@@ -83,9 +83,11 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '2U6L38DLSW' }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || 'Developer ID Application: Mathis Escriva (2U6L38DLSW)' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
+          IDENTITY="${APPLE_SIGNING_IDENTITY:-Developer ID Application: Mathis Escriva (2U6L38DLSW)}"
+          TEAM_ID="${APPLE_TEAM_ID:-2U6L38DLSW}"
           APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
           DMG_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
           DMG=$(ls "$DMG_DIR"/*.dmg 2>/dev/null | head -1)
@@ -94,7 +96,6 @@ jobs:
             exit 1
           fi
           echo "DMG à signer: $DMG"
-          IDENTITY="$APPLE_SIGNING_IDENTITY"
           ENTITLEMENTS="desktop/src-tauri/entitlements.mac.plist"
 
           # ÉTAPE 1 : Signer tous les composants internes (de l'intérieur vers l'extérieur)
@@ -145,7 +146,7 @@ jobs:
           xcrun notarytool submit /tmp/Gilbert.zip \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
+            --team-id "$TEAM_ID" \
             --wait 2>&1 | tee /tmp/notary_result.txt
 
           if ! grep -q "status: Accepted" /tmp/notary_result.txt; then
@@ -154,7 +155,7 @@ jobs:
             [ -n "$SUBMISSION_ID" ] && xcrun notarytool log "$SUBMISSION_ID" \
               --apple-id "$APPLE_ID" \
               --password "$APPLE_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" || true
+              --team-id "$TEAM_ID" || true
             exit 1
           fi
           echo "✅ Notarisation app acceptée"
@@ -212,7 +213,7 @@ jobs:
           xcrun notarytool submit "$DMG" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
+            --team-id "$TEAM_ID" \
             --wait 2>&1 | tee /tmp/notary_dmg_result.txt
 
           if grep -q "status: Accepted" /tmp/notary_dmg_result.txt; then
