@@ -1470,6 +1470,8 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
   const updateMeetingInStore = useDataStore((state) => state.updateMeeting)
   const removeMeetingFromStore = useDataStore((state) => state.removeMeeting)
   const addMeetingToStore = useDataStore((state) => state.addMeeting)
+  const invalidateSharedMeetings = useDataStore((state) => state.invalidateSharedMeetings)
+  const fetchSharedMeetings = useDataStore((state) => state.fetchSharedMeetings)
 
   // isLoading = true seulement si on charge ET qu'on n'a pas de données
   const isLoading = (
@@ -1595,6 +1597,8 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
     return () => unsubscribe()
   }, [showSuccessPopup, meetings, updateMeetingInStore, addMeetingToStore])
   const previousStatusRef = useRef<Map<string, { transcript: string; summary: string }>>(new Map())
+  // Meetings qui renvoient 401 en boucle → ne plus les inclure dans le poll (évite spam logs)
+  const unauthMeetingIdsRef = useRef<Set<string>>(new Set())
 
   // Store latest showSuccessPopup in ref
   const showSuccessPopupRef = useRef(showSuccessPopup)
@@ -1616,6 +1620,7 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
 
   useEffect(() => {
     if (!hasProcessingMeetings) {
+      unauthMeetingIdsRef.current.clear() // Reset pour le prochain cycle de polling
       return
     }
 
@@ -1626,23 +1631,27 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
 
         // Pour les meetings "en cours", appeler le détail pour forcer le backend à mettre à jour
         const processingMeetings = freshMeetings.filter(m => {
+          if (unauthMeetingIdsRef.current.has(m.id)) return false // Ne plus poller si 401 répétés
           const ts = m.transcript_status || m.transcription_status
           const ss = m.summary_status
           return ts === 'processing' || ts === 'pending' || ss === 'processing'
         }).slice(0, 3) // Max 3 pour ne pas surcharger
 
         if (processingMeetings.length > 0) {
-          // Appeler le détail de chaque meeting en cours pour "réveiller" le backend
+          // Appeler le détail de chaque meeting en cours (isPolling évite logout sur 401)
           const detailPromises = processingMeetings.map(async (m) => {
             try {
-              const detail = await getMeetingDetails(m.id)
-              if (detail) {
-                // Mettre à jour le store avec les détails frais
+              const detail = await getMeetingDetails(m.id, { isPolling: true })
+              if (detail && detail.transcript_status !== 'deleted') {
                 updateMeetingInStore(m.id, detail)
                 return { id: m.id, ...detail }
               }
-            } catch {
-              // Ignorer les erreurs
+              // null ou "deleted" (souvent 401 après retries) → exclure du polling
+              unauthMeetingIdsRef.current.add(m.id)
+            } catch (err) {
+              const is401 = err instanceof Error && err.message?.includes('401') ||
+                (err && typeof err === 'object' && 'status' in err && (err as { status?: number }).status === 401)
+              if (is401) unauthMeetingIdsRef.current.add(m.id)
             }
             return null
           })
@@ -1976,12 +1985,14 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
     void loadMeetingDetails()
   }, [overlayMeeting?.id, overlayOpen])
 
-  const handleLoadTranscript = useCallback(async (meetingId: string) => {
-    setIsLoadingTranscript(true)
+  const handleLoadTranscript = useCallback(async (meetingId: string, opts?: { isPolling?: boolean }) => {
+    if (!opts?.isPolling) {
+      setIsLoadingTranscript(true)
+    }
     try {
       // Charger les données du meeting ET les speakers en parallèle
       const [response, speakersData] = await Promise.all([
-        apiClient.get(`/simple/meetings/${meetingId}`) as Promise<Record<string, unknown>>,
+        apiClient.get(`/simple/meetings/${meetingId}`, true, { ignoreError: opts?.isPolling }) as Promise<Record<string, unknown>>,
         getSpeakers(meetingId)
       ])
       const meetingData = (response.data || response) as Record<string, unknown>
@@ -2085,9 +2096,12 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
         }
       }
     } catch (err) {
-      showErrorPopup('Erreur', 'Impossible de charger la transcription')
-      // Set empty array on error to stop infinite polling
-      setFormattedTranscript([])
+      if (!opts?.isPolling) {
+        showErrorPopup('Erreur', 'Impossible de charger la transcription')
+      }
+      if (!opts?.isPolling) {
+        setFormattedTranscript([])
+      }
     } finally {
       setIsLoadingTranscript(false)
     }
@@ -2205,6 +2219,8 @@ export function ExchangesPage({ isMobile: isMobileProp, isTablet: isTabletProp }
     try {
       await deleteMeeting(meetingToDelete.id)
       removeMeetingFromStore(meetingToDelete.id)
+      invalidateSharedMeetings()
+      fetchSharedMeetings(true)
       setDeleteDialogOpen(false)
       setMeetingToDelete(null)
       // Show delete success animation

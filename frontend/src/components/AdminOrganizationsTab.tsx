@@ -67,7 +67,7 @@ import {
   type OrganizationTemplate,
 } from '../services/organizationService';
 import { getAdminUsers } from '../services/meetingService';
-import apiClient, { getAssetUrl } from '../services/apiClient';
+import apiClient from '../services/apiClient';
 import { logger } from '@/utils/logger';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://gilbert.lexiapro.fr';
@@ -155,15 +155,14 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
     loadOrganizations();
   }, [loadOrganizations]);
 
-  // Charger les utilisateurs
+  // Charger tous les utilisateurs (jusqu'à 10000, couvre la grande majorité des cas)
   const loadUsers = useCallback(async () => {
     try {
-      const data = await getAdminUsers(1, 100); // Max 100 utilisateurs (limite de l'API)
+      const data = await getAdminUsers(1, 10000);
       logger.debug('👥 Utilisateurs chargés:', data);
-      // getAdminUsers retourne {users: [], total: X}, pas directement un tableau
       const usersArray = data?.users || [];
-      logger.debug('👥 Users count:', usersArray.length);
       setUsers(usersArray);
+      logger.debug('👥 Users count:', usersArray.length);
     } catch (err) {
       logger.error('❌ Erreur lors du chargement des utilisateurs:', err);
       setUsers([]);
@@ -836,20 +835,18 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {(users || [])
-                      .filter((user) => {
-                        // Exclure les membres existants
+                    {(() => {
+                      const filtered = (users || []).filter((user) => {
                         const isMember = (members || []).some((m) => m.user_id === user.id);
                         if (isMember) return false;
-                        // Filtrer par recherche
                         if (!searchMember) return true;
                         return (
                           user.full_name?.toLowerCase().includes(searchMember.toLowerCase()) ||
                           user.email?.toLowerCase().includes(searchMember.toLowerCase())
                         );
-                      })
-                      .slice(0, 50) // Limiter à 50 résultats
-                      .map((user) => (
+                      });
+                      const toShow = filtered.slice(0, 500); // Limite d'affichage pour les perfs, la recherche affine
+                      return toShow.map((user) => (
                         <TableRow key={user.id}>
                           <TableCell>
                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -892,16 +889,19 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
                             </IconButton>
                           </TableCell>
                         </TableRow>
-                      ))}
-                    {(users || []).filter((user) => {
-                      const isMember = (members || []).some((m) => m.user_id === user.id);
-                      if (isMember) return false;
-                      if (!searchMember) return true;
-                      return (
-                        user.full_name?.toLowerCase().includes(searchMember.toLowerCase()) ||
-                        user.email?.toLowerCase().includes(searchMember.toLowerCase())
-                      );
-                    }).length === 0 && (
+                      ));
+                    })()}
+                    {(() => {
+                      const filtered = (users || []).filter((user) => {
+                        const isMember = (members || []).some((m) => m.user_id === user.id);
+                        if (isMember) return false;
+                        if (!searchMember) return true;
+                        return (
+                          user.full_name?.toLowerCase().includes(searchMember.toLowerCase()) ||
+                          user.email?.toLowerCase().includes(searchMember.toLowerCase())
+                        );
+                      });
+                      return filtered.length === 0 && (
                       <TableRow>
                         <TableCell colSpan={3} align="center">
                           <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
@@ -909,12 +909,15 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
                           </Typography>
                         </TableCell>
                       </TableRow>
-                    )}
+                    );
+                    })()}
                   </TableBody>
                 </Table>
               </TableContainer>
               <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                Utilisez la recherche pour trouver des utilisateurs spécifiques
+                {users.length > 500
+                  ? `${users.length} utilisateurs chargés. Utilisez la recherche pour trouver quelqu'un.`
+                  : 'Utilisez la recherche pour trouver des utilisateurs spécifiques'}
               </Typography>
             </>
           )}
@@ -1024,7 +1027,7 @@ const AdminOrganizationsTab: React.FC<AdminOrganizationsTabProps> = ({ loading: 
                               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                                 {template.logo_url && (
                                   <Avatar
-                                    src={getAssetUrl(template.logo_url)}
+                                    src={`${API_BASE_URL}${template.logo_url}`}
                                     variant="rounded"
                                     sx={{ width: 32, height: 32 }}
                                   />

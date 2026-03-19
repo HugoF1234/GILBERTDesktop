@@ -3,20 +3,19 @@
  * Contient la Sidebar, le GenerationBanner et le Outlet pour les routes enfants
  */
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Box, Typography, useMediaQuery, Dialog, DialogTitle, DialogContent, DialogActions, Button } from '@mui/material';
 import theme from '../styles/theme';
 import Sidebar from '../components/Sidebar';
 // NotificationProvider est déjà dans main.tsx, pas besoin de le remettre ici
-import { isAuthenticated, getUserProfile, getCachedUser, logoutUser, exchangeOAuthCode, verifyTokenValidity } from '../services/authService';
+import { isAuthenticated, getUserProfile, logoutUser, exchangeOAuthCode, verifyTokenValidity } from '../services/authService';
 import type { User } from '../services/authService';
 import { NetworkError, isOffline } from '../services/apiClient';
 import { getViewFromPath, VIEW_TO_PATH } from '../types/router';
 import type { ViewType } from '../types/router';
 import type { RouteContextType } from '../hooks/useRouteContext';
 import { recordingManager } from '../services/recordingManager';
-import { isTauriApp } from '../services/tauriRecordingService';
 
 // Import des bannières
 import GenerationBanner from '../components/GenerationBanner';
@@ -27,7 +26,6 @@ import OnboardingTour, { useOnboarding } from '../components/OnboardingTour';
 import OnboardingQuestionnaire, { useOnboardingQuestionnaire } from '../components/OnboardingQuestionnaire';
 import { saveOnboardingQuestionnaire } from '../services/profileService';
 import { logger } from '@/utils/logger';
-import OnboardingModal from '../components/OnboardingModal';
 
 /** Composant de chargement */
 function LoadingScreen(): React.ReactElement {
@@ -42,30 +40,10 @@ function RootLayout(): React.ReactElement {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // ── Dans Tauri : forcer la navigation vers / au démarrage ────────────────
-  // WebKit mémorise la dernière URL visitée et la restaure au prochain lancement.
-  // On veut toujours partir de / pour avoir l'interface correcte (ImmersiveRecordingPage).
-  useEffect(() => {
-    if (isTauriApp() && location.pathname !== '/' && location.pathname !== '/auth') {
-      logger.debug(`[RootLayout] Tauri startup: redirection ${location.pathname} → /`);
-      navigate('/', { replace: true });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Exécuté une seule fois au montage
-
   // État utilisateur et authentification
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isProcessingOAuth, setIsProcessingOAuth] = useState<boolean>(false);
-  // Counter de session : s'incrémente à chaque connexion pour forcer un remontage de l'Outlet
-  // même si le même compte se reconnecte (currentUser.id identique entre deux sessions)
-  const [sessionCounter, setSessionCounter] = useState<number>(0);
-
-  // Helper : setter l'utilisateur ET incrémenter le counter de session simultanément
-  const loginUser = useCallback((user: User) => {
-    setSessionCounter(c => c + 1);
-    setCurrentUser(user);
-  }, []);
 
   // États d'enregistrement et upload
   const [isRecording, setIsRecording] = useState<boolean>(false);
@@ -80,16 +58,8 @@ function RootLayout(): React.ReactElement {
   const { showQuestionnaire, isCompleted: questionnaireCompleted, completeQuestionnaire } = useOnboardingQuestionnaire(!!currentUser, userId);
   const { showOnboarding, completeOnboarding } = useOnboarding(userId);
 
-  // Onboarding desktop (autorisations micro/système/notifs) — uniquement dans Tauri, une fois par compte
-  const [showDesktopOnboarding, setShowDesktopOnboarding] = useState(false);
-  useEffect(() => {
-    if (!currentUser || !isTauriApp()) return;
-    const key = `onboarding_done_${currentUser.id}`;
-    if (!localStorage.getItem(key)) {
-      // Attendre que le questionnaire/tour soient terminés avant d'afficher
-      if (questionnaireCompleted) setShowDesktopOnboarding(true);
-    }
-  }, [currentUser, questionnaireCompleted]);
+  // Ref pour le conteneur scrollable (scroll to top à la navigation)
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
   // Détection responsive - utilise les breakpoints du thème
   const isMobile = useMediaQuery(theme.breakpoints.down('sm')); // < 600px
@@ -101,16 +71,12 @@ function RootLayout(): React.ReactElement {
     return getViewFromPath(location.pathname);
   }, [location.pathname]);
 
-  // Vérification de l'authentification au montage et lors des changements d'URL
+  // Scroll to top à chaque changement de route (évite le bug "discussions qui montent" sur Partages)
   useEffect(() => {
-    // Si on arrive sur /auth sans token, effacer l'utilisateur courant
-    // (permet un remontage propre de l'Outlet à la reconnexion avec un autre compte)
-    if (location.pathname === '/auth' && !window.location.search.includes('token=') && !window.location.search.includes('code=')) {
-      if (currentUser !== null) setCurrentUser(null);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    mainScrollRef.current?.scrollTo({ top: 0, behavior: 'auto' });
   }, [location.pathname]);
 
+  // Vérification de l'authentification au montage et lors des changements d'URL
   useEffect(() => {
     const checkAuth = async (): Promise<void> => {
       // ========== PRIORITÉ 1: Vérifier s'il y a un OAuth code ou token dans l'URL ==========
@@ -130,28 +96,18 @@ function RootLayout(): React.ReactElement {
 
         try {
           // Échanger le code temporaire contre le vrai JWT
-          await exchangeOAuthCode(oauthCode);
+          const authResponse = await exchangeOAuthCode(oauthCode);
           logger.debug('[RootLayout] Code échangé avec succès, token reçu');
 
           // Le token est déjà stocké par exchangeOAuthCode, récupérer le profil
           const user = await getUserProfile();
           logger.debug('[RootLayout] Profil utilisateur récupéré:', user.email);
+          setCurrentUser(user);
 
           setIsProcessingOAuth(false);
           setIsLoading(false);
 
-          if ((window as any).__TAURI__) {
-            // Nettoyer l'URL OAuth de la barre d'adresse AVANT le rechargement
-            // (pour éviter que checkAuth re-traite le même code OAuth au prochain démarrage)
-            window.history.replaceState({}, document.title, '/');
-            // Effacer le flag de session pour que main.tsx traite le rechargement
-            // comme un cold start propre (garantit un état React totalement frais)
-            sessionStorage.removeItem('gilbert_app_session');
-            window.location.replace('/');
-            return;
-          }
-
-          loginUser(user);
+          // Nettoyer l'URL et rediriger vers l'application
           logger.debug('[RootLayout] OAuth réussi, redirection vers /');
           navigate('/', { replace: true });
           return;
@@ -190,19 +146,11 @@ function RootLayout(): React.ReactElement {
           logger.debug('[RootLayout] Récupération du profil utilisateur...');
           const user = await getUserProfile();
           logger.debug('[RootLayout] Profil utilisateur récupéré:', user.email);
+          setCurrentUser(user);
 
           setIsProcessingOAuth(false);
           setIsLoading(false);
 
-          // Dans Tauri : rechargement complet pour garantir une initialisation propre
-          if ((window as any).__TAURI__) {
-            window.history.replaceState({}, document.title, '/');
-            sessionStorage.removeItem('gilbert_app_session');
-            window.location.replace('/');
-            return;
-          }
-
-          loginUser(user);
           // Rediriger vers l'application
           if (window.location.pathname === '/auth') {
             logger.debug('[RootLayout] OAuth réussi sur /auth, redirection vers /');
@@ -295,21 +243,18 @@ function RootLayout(): React.ReactElement {
       // Token is valid - fetch user profile for the UI
       try {
         const user = await getUserProfile();
-        loginUser(user);
+        setCurrentUser(user);
       } catch (error) {
-        // If getUserProfile fails after token was validated, it's likely a network error (offline).
-        // Use cached user for display so name/avatar remain visible.
+        // If getUserProfile fails after token was validated, it's likely a network error
+        // (since verifyTokenValidity already confirmed the token is good).
+        // Don't redirect - keep the user on the page.
         if (error instanceof NetworkError || isOffline()) {
-          const cached = getCachedUser();
-          if (cached) {
-            logger.debug('[RootLayout] Offline — utilisation du profil en cache');
-            loginUser(cached);
-          }
+          logger.debug('[RootLayout] Erreur reseau (offline) - garder l\'utilisateur sur la page actuelle');
+          setIsLoading(false);
+          return;
         }
         // Unexpected error fetching profile - don't break the app
-        if (!(error instanceof NetworkError) && !isOffline()) {
-          logger.debug('[RootLayout] Erreur inattendue lors de la recuperation du profil');
-        }
+        logger.debug('[RootLayout] Erreur inattendue lors de la recuperation du profil');
       } finally {
         setIsLoading(false);
       }
@@ -342,18 +287,11 @@ function RootLayout(): React.ReactElement {
         try {
           const user = await getUserProfile();
           logger.debug('[RootLayout] Profil utilisateur récupéré après détection:', user.email);
+          setCurrentUser(user);
 
-          if ((window as any).__TAURI__) {
-            // Rechargement complet dans Tauri pour une initialisation propre
-            window.history.replaceState({}, document.title, '/');
-            sessionStorage.removeItem('gilbert_app_session');
-            window.location.replace('/');
-            return;
-          }
-
-          loginUser(user);
           // Nettoyer l'URL APRÈS avoir récupéré le profil avec succès
           window.history.replaceState({}, document.title, window.location.pathname);
+
           setIsLoading(false);
         } catch (error) {
           logger.error('[RootLayout] Failed to get user profile after OAuth detection:', error);
@@ -400,59 +338,6 @@ function RootLayout(): React.ReactElement {
     const syncInterval = setInterval(checkRecording, 1000);
     return () => clearInterval(syncInterval);
   }, []);
-
-  // Écouter start-recording-from-notif globalement (clic sur notification macOS)
-  // Ce listener est au niveau RootLayout pour fonctionner même si ImmersiveRecordingPage n'est pas monté
-  useEffect(() => {
-    if (!isTauriApp()) return;
-    const tauri = (window as any).__TAURI__;
-    if (!tauri?.event?.listen) return;
-
-    const p = tauri.event.listen('start-recording-from-notif', async () => {
-      // Stocker le flag pour qu'ImmersiveRecordingPage démarre l'enregistrement au montage
-      sessionStorage.setItem('auto_start_recording', '1');
-      // Naviguer vers la page d'enregistrement (/) si pas déjà dessus
-      if (window.location.pathname !== '/' && !window.location.pathname.startsWith('/auth')) {
-        navigate('/', { replace: false });
-      }
-      // Amener la fenêtre au premier plan si en mode compact
-      try {
-        const core = tauri?.tauri?.invoke || tauri?.core?.invoke;
-        if (core) {
-          await core('exit_compact_mode').catch(() => {});
-          const win = await tauri?.window?.appWindow || tauri?.window?.WebviewWindow?.getByLabel?.('main');
-          if (win) {
-            await win.show?.();
-            await win.setFocus?.();
-          }
-        }
-      } catch {}
-    });
-
-    // start-recording-compact : naviguer vers la page d'enregistrement (/) ET passer en compact
-    const p2 = tauri.event.listen('start-recording-compact', async () => {
-      sessionStorage.setItem('auto_start_recording_compact', '1');
-      if (window.location.pathname !== '/' && !window.location.pathname.startsWith('/auth')) {
-        navigate('/', { replace: false });
-      }
-      try {
-        const core = tauri?.tauri?.invoke || tauri?.core?.invoke;
-        if (core) {
-          const win = await tauri?.window?.appWindow || tauri?.window?.WebviewWindow?.getByLabel?.('main');
-          if (win) await win.show?.();
-        }
-      } catch {}
-    });
-
-    return () => {
-      p.then((u: () => void) => u()).catch(() => {});
-      p2.then((u: () => void) => u()).catch(() => {});
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigate]);
-
-  // Note : le listener "oauth-callback" est géré dans main.tsx (avant React)
-  // pour garantir qu'il est actif dès le démarrage, sans dépendance au cycle de vie React.
 
   // Protection contre la fermeture pendant l'enregistrement OU l'upload
   useEffect(() => {
@@ -507,26 +392,6 @@ function RootLayout(): React.ReactElement {
   const handleCloseUploadWarning = useCallback((): void => {
     setShowUploadWarning(false);
   }, []);
-
-  // ── Écoute des events Tauri globaux (tray menu, widget) ──
-  useEffect(() => {
-    if (!isTauriApp()) return;
-    const tauri = (window as any).__TAURI__;
-    if (!tauri?.event?.listen) return;
-
-    // Event depuis le tray "Démarrer enregistrement" → naviguer vers / et démarrer
-    const unlistenPromise = tauri.event.listen('tray-start-recording', () => {
-      navigate('/', { replace: false });
-      // Petit délai pour laisser la page se monter avant d'émettre l'event de démarrage
-      setTimeout(() => {
-        tauri.event.emit?.('widget-auto-start-recording', {});
-      }, 300);
-    });
-
-    return () => {
-      unlistenPromise.then((unlisten: () => void) => unlisten()).catch(() => {});
-    };
-  }, [navigate]);
 
   // Context passé aux routes enfants via Outlet
   const outletContext: RouteContextType = useMemo(() => ({
@@ -596,10 +461,11 @@ function RootLayout(): React.ReactElement {
           {/* Bannières */}
           <GenerationBanner />
           <RecordingBanner />
-          <Box sx={{ flexGrow: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {/* La key combine user id ET session counter pour forcer un remontage
-                complet à chaque connexion, même si le même compte se reconnecte */}
-            <Outlet key={`${currentUser?.id ?? 'guest'}-${sessionCounter}`} context={outletContext} />
+          <Box
+            ref={mainScrollRef}
+            sx={{ flexGrow: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+          >
+            <Outlet context={outletContext} />
           </Box>
         </Box>
 
@@ -686,15 +552,6 @@ function RootLayout(): React.ReactElement {
             userId={userId}
           />
         )}
-
-        {/* Onboarding Desktop — autorisations micro/système/notifs (Tauri uniquement) */}
-        {showDesktopOnboarding && currentUser && (
-          <OnboardingModal
-            userId={currentUser.id}
-            onDone={() => setShowDesktopOnboarding(false)}
-          />
-        )}
-
       </Box>
   );
 }

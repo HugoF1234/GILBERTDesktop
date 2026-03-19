@@ -32,6 +32,7 @@ import {
   Lock,
   ChevronDown,
   ChevronUp,
+  Volume2,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -41,7 +42,7 @@ import type { Subscription, Invoice } from '../services/subscriptionService';
 import { logoutUser } from '../services/authService';
 import { getMyOrganizations, type Organization } from '../services/organizationService';
 import { getDiscoveryStatus, changePassword, type DiscoveryStatus } from '../services/profileService';
-import sounds from '../utils/soundDesign';
+import sounds, { getSoundDesignEnabled, setSoundDesignEnabled } from '../utils/soundDesign';
 import {
   Dialog,
   DialogContent,
@@ -80,6 +81,18 @@ const SettingsPage: React.FC = () => {
   const [changingPlan, setChangingPlan] = useState(false);
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [billingPeriod, setBillingPeriod] = useState<'monthly' | 'yearly'>('monthly');
+
+  // Accordéon Prendre contact (réduit par défaut, s'ouvre via "Faire la demande")
+  const [contactAccordionOpen, setContactAccordionOpen] = useState(false);
+
+  // Sound design (activé par défaut, persisté en localStorage)
+  const [soundDesignEnabled, setSoundDesignEnabledState] = useState(getSoundDesignEnabled);
+
+  // Accordéon Factures
+  const [invoicesAccordionOpen, setInvoicesAccordionOpen] = useState(false);
+
+  // Accordéon Informations légales
+  const [legalAccordionOpen, setLegalAccordionOpen] = useState(false);
 
   // Changement de mot de passe (accordéon)
   const [passwordAccordionOpen, setPasswordAccordionOpen] = useState(false);
@@ -392,13 +405,7 @@ const SettingsPage: React.FC = () => {
   const handleLogout = () => {
     sounds.click();
     logoutUser();
-    // Dans Tauri, forcer un rechargement complet de la WebView pour repartir d'un état propre
-    if ((window as any).__TAURI__) {
-      sessionStorage.removeItem('gilbert_app_session');
-      window.location.replace('/');
-    } else {
-      navigate('/auth', { replace: true });
-    }
+    navigate('/auth', { replace: true });
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -437,10 +444,13 @@ const SettingsPage: React.FC = () => {
 
   const scrollToContact = () => {
     sounds.click();
-    const contactSection = document.getElementById('contact-section');
-    if (contactSection) {
-      contactSection.scrollIntoView({ behavior: 'smooth' });
-    }
+    setContactAccordionOpen(true);
+    setTimeout(() => {
+      const contactSection = document.getElementById('contact-section');
+      if (contactSection) {
+        contactSection.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
   };
 
   const handleContactSubmit = async (e: React.FormEvent) => {
@@ -531,7 +541,7 @@ const SettingsPage: React.FC = () => {
         variants={containerVariants}
         initial="hidden"
         animate="visible"
-        className="max-w-4xl mx-auto px-4 sm:px-6 py-8"
+        className="max-w-6xl mx-auto px-4 sm:px-6 py-8"
     >
         {/* Header */}
         <motion.div variants={itemVariants} className="mb-6 sm:mb-8">
@@ -550,8 +560,27 @@ const SettingsPage: React.FC = () => {
             </CardHeader>
             <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6">
               {loadingSubscription ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+                  <div className="flex-1 p-4 rounded-xl min-h-[280px] border border-slate-200 space-y-3">
+                    <div className="h-5 w-20 rounded bg-slate-200 animate-pulse" />
+                    <div className="h-6 w-28 rounded bg-slate-200 animate-pulse" />
+                    <div className="h-8 w-16 rounded bg-slate-200 animate-pulse" />
+                    <div className="space-y-2 mt-4">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="h-4 w-full rounded bg-slate-200 animate-pulse" />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex-1 p-4 rounded-xl min-h-[280px] border border-slate-200 space-y-3">
+                    <div className="h-5 w-20 rounded bg-slate-200 animate-pulse" />
+                    <div className="h-6 w-24 rounded bg-slate-200 animate-pulse" />
+                    <div className="h-8 w-20 rounded bg-slate-200 animate-pulse" />
+                    <div className="space-y-2 mt-4">
+                      {[1, 2, 3, 4].map((i) => (
+                        <div key={i} className="h-4 w-full rounded bg-slate-200 animate-pulse" />
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
@@ -620,7 +649,7 @@ const SettingsPage: React.FC = () => {
                               </div>
                               <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-slate-600">
                                 <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 flex-shrink-0" />
-                                <span>Synthèses IA</span>
+                                <span>Synthèse intelligente</span>
                               </div>
                               <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-slate-600">
                                 <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 flex-shrink-0" />
@@ -758,7 +787,7 @@ const SettingsPage: React.FC = () => {
                     {/* Prix dynamique selon la période */}
                     <p className="text-xl sm:text-2xl font-bold text-slate-900 mb-2 sm:mb-3">
                       {subscription?.plan === 'gilbert_plus_yearly' ? (
-                        // Abonné annuel : toujours afficher le prix mensuel engagement
+                        // Abonné engagé 12 mois : afficher le prix mensuel engagé
                         <>19,90€<span className="text-xs sm:text-sm font-normal">/mois</span></>
                       ) : (
                         // Pas Pro OU mensuel : afficher selon le toggle
@@ -777,7 +806,7 @@ const SettingsPage: React.FC = () => {
                     <div className="space-y-1 sm:space-y-1.5 mb-3 sm:mb-4">
                       <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-slate-600">
                         <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 flex-shrink-0" />
-                        <span>Durée illimitée</span>
+                        <span>30 heures par mois</span>
                       </div>
                       <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-slate-600">
                         <Check className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-500 flex-shrink-0" />
@@ -862,7 +891,7 @@ const SettingsPage: React.FC = () => {
                             </span>
                           </div>
 
-                          {/* Bouton pour passer au mensuel (uniquement si annuel et pas résilié) */}
+                          {/* Bouton pour passer au mensuel (uniquement si engagé et engagement terminé, pas résilié) */}
                           {subscription?.plan === 'gilbert_plus_yearly' && !isCanceled && (
                             <div className="pt-2 border-t border-slate-200 mt-2">
                               <button
@@ -880,7 +909,7 @@ const SettingsPage: React.FC = () => {
                                 ) : (
                                   <RefreshCw className="h-3.5 w-3.5" />
                                 )}
-                                Passer au mensuel
+                                Passer au mensuel sans engagement
                               </button>
                             </div>
                           )}
@@ -1038,19 +1067,48 @@ const SettingsPage: React.FC = () => {
           </Card>
         </motion.div>
 
-        {/* Section Factures */}
+        {/* Section Factures (accordéon) */}
         <motion.div variants={itemVariants} className="mb-6 sm:mb-8">
-          <Card className="border-slate-200">
-            <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6 pt-3 sm:pt-6">
-              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
-                <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-slate-600" />
-                Mes factures
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6">
+          <Card className="border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                sounds.tab();
+                setInvoicesAccordionOpen(!invoicesAccordionOpen);
+              }}
+              className="w-full flex items-center justify-between p-3 sm:p-4 text-left hover:bg-slate-50/50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-100 rounded-lg">
+                  <FileText className="h-5 w-5 text-slate-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-900">Mes factures</h3>
+                  <p className="text-sm text-slate-500">
+                    {invoices.length > 0 ? `${invoices.length} facture(s)` : 'Historique des paiements'}
+                  </p>
+                </div>
+              </div>
+              {invoicesAccordionOpen ? (
+                <ChevronUp className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              ) : (
+                <ChevronDown className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              )}
+            </button>
+            {invoicesAccordionOpen && (
+              <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6 border-t border-slate-100">
               {loadingSubscription ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 rounded-lg border border-slate-200">
+                      <div className="h-4 w-4 rounded bg-slate-200 animate-pulse" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 w-24 rounded bg-slate-200 animate-pulse" />
+                        <div className="h-3 w-16 rounded bg-slate-200 animate-pulse" />
+                      </div>
+                      <div className="h-6 w-16 rounded-full bg-slate-200 animate-pulse" />
+                    </div>
+                  ))}
                 </div>
               ) : invoices.length > 0 ? (
                 <div className="space-y-2">
@@ -1113,20 +1171,80 @@ const SettingsPage: React.FC = () => {
                   <p className="text-sm text-slate-500">Aucune facture disponible</p>
                 </div>
               )}
-                  </CardContent>
-                </Card>
+              </CardContent>
+            )}
+          </Card>
         </motion.div>
 
-        {/* Section Prendre contact - Offre Entreprise */}
-        <motion.div id="contact-section" variants={itemVariants} className="mb-6 sm:mb-8">
+        {/* Section Sound Design */}
+        <motion.div variants={itemVariants} className="mb-6 sm:mb-8">
           <Card className="border-slate-200">
-            <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6 pt-3 sm:pt-6">
-              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
-                <Mail className="w-4 h-4 sm:w-5 sm:h-5 text-purple-600" />
-                Prendre contact
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6">
+            <CardContent className="pt-4 sm:pt-6 px-3 sm:px-6 pb-4 sm:pb-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-slate-100 rounded-lg">
+                    <Volume2 className="h-5 w-5 text-slate-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900">Sound Design</h3>
+                    <p className="text-sm text-slate-500">Sons subtils lors des actions (enregistrement, partage, suppression...)</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={soundDesignEnabled}
+                  onClick={() => {
+                    const next = !soundDesignEnabled;
+                    setSoundDesignEnabled(next);
+                    setSoundDesignEnabledState(next);
+                    sounds.click();
+                  }}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+                    soundDesignEnabled ? 'bg-blue-500' : 'bg-slate-200'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition duration-200 translate-y-0',
+                      soundDesignEnabled ? 'translate-x-5' : 'translate-x-0.5'
+                    )}
+                  />
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Section Prendre contact - Offre Entreprise (accordéon) */}
+        <motion.div id="contact-section" variants={itemVariants} className="mb-6 sm:mb-8">
+          <Card className="border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                sounds.tab();
+                setContactAccordionOpen(!contactAccordionOpen);
+              }}
+              className="w-full flex items-center justify-between p-3 sm:p-4 text-left hover:bg-slate-50/50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-100 rounded-lg">
+                  <Mail className="h-5 w-5 text-slate-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-900">Prendre contact</h3>
+                  <p className="text-sm text-slate-500">Demande d'information sur l'offre Entreprise</p>
+                </div>
+              </div>
+              {contactAccordionOpen ? (
+                <ChevronUp className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              ) : (
+                <ChevronDown className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              )}
+            </button>
+            {contactAccordionOpen && (
+              <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6 border-t border-slate-100">
               <p className="text-sm text-slate-500 mb-4">
                 Vous souhaitez en savoir plus sur l'offre Entreprise ? Remplissez le formulaire ci-dessous et nous vous contacterons rapidement.
               </p>
@@ -1232,20 +1350,39 @@ const SettingsPage: React.FC = () => {
                   </Button>
                 </div>
               </form>
-            </CardContent>
+              </CardContent>
+            )}
           </Card>
         </motion.div>
 
-        {/* Section Informations légales */}
+        {/* Section Informations légales (accordéon) */}
         <motion.div variants={itemVariants} className="mb-6 sm:mb-8">
-          <Card className="border-slate-200">
-            <CardHeader className="pb-2 sm:pb-3 px-3 sm:px-6 pt-3 sm:pt-6">
-              <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
-                <FileText className="w-4 h-4 sm:w-5 sm:h-5 text-slate-600" />
-                Informations légales
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6">
+          <Card className="border-slate-200 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                sounds.tab();
+                setLegalAccordionOpen(!legalAccordionOpen);
+              }}
+              className="w-full flex items-center justify-between p-3 sm:p-4 text-left hover:bg-slate-50/50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-100 rounded-lg">
+                  <FileText className="h-5 w-5 text-slate-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-900">Informations légales</h3>
+                  <p className="text-sm text-slate-500">CGU, CGV, confidentialité, mentions légales</p>
+                </div>
+              </div>
+              {legalAccordionOpen ? (
+                <ChevronUp className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              ) : (
+                <ChevronDown className="h-5 w-5 text-slate-500 flex-shrink-0" />
+              )}
+            </button>
+            {legalAccordionOpen && (
+              <CardContent className="pt-0 px-3 sm:px-6 pb-3 sm:pb-6 border-t border-slate-100">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   onClick={() => {
@@ -1307,7 +1444,8 @@ const SettingsPage: React.FC = () => {
                   </div>
                 </button>
               </div>
-            </CardContent>
+              </CardContent>
+            )}
           </Card>
         </motion.div>
 
@@ -1320,7 +1458,7 @@ const SettingsPage: React.FC = () => {
                 sounds.tab();
                 setPasswordAccordionOpen(!passwordAccordionOpen);
               }}
-              className="w-full flex items-center justify-between p-4 sm:p-6 text-left hover:bg-slate-50/50 transition-colors"
+              className="w-full flex items-center justify-between p-3 sm:p-4 text-left hover:bg-slate-50/50 transition-colors"
             >
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-slate-100 rounded-lg">
@@ -1339,7 +1477,7 @@ const SettingsPage: React.FC = () => {
             </button>
             {passwordAccordionOpen && (
               <CardContent className="pt-0 px-4 sm:px-6 pb-4 sm:pb-6 border-t border-slate-100">
-                <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
+                <form onSubmit={handleChangePassword} className="space-y-4 w-full max-w-md mx-auto">
                   <div>
                     <Label htmlFor="current-password" className="text-slate-700">Mot de passe actuel</Label>
                     <Input

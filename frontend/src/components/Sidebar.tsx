@@ -7,10 +7,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { User } from '../services/authService';
-import { getUserProfile, getCachedProfile, getDiscoveryStatus, DiscoveryStatus } from '../services/profileService';
+import { getUserProfile, getDiscoveryStatus, DiscoveryStatus } from '../services/profileService';
 import sounds from '../utils/soundDesign';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { Zap, WifiOff } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import { Zap } from 'lucide-react';
 import { VIEW_TO_PATH, getViewFromPath } from '../types/router';
 import type { ViewType } from '../types/router';
 import { useRecordingStore } from '../stores/recordingStore';
@@ -133,7 +134,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [userProfile, setUserProfile] = useState<ProfileData | null>(null);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus | null>(null);
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   // État du dialog de sauvegarde depuis le store
   const showSaveDialog = useRecordingStore((state: any) => state.showSaveDialog);
 
@@ -148,16 +148,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   const lastUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // Ne charger le profil que si l'ID utilisateur change vraiment (pas juste la référence)
     const currentUserId = user?.id || null;
     
     if (currentUserId && currentUserId !== lastUserIdRef.current) {
+      // Nouvel utilisateur, charger le profil
       lastUserIdRef.current = currentUserId;
-      // Charger immédiatement le cache pour éviter le flash "U" (offline ou latence)
-      const cached = getCachedProfile();
-      if (cached && cached.id === currentUserId) {
-        setUserProfile(cached);
-        setCachedProfilePicture(cached.profile_picture_url ?? undefined);
-      }
       fetchUserProfile();
     } else if (!currentUserId && lastUserIdRef.current) {
       // Déconnexion
@@ -193,38 +189,29 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [useDrawerMode]);
 
-  // Indicateur hors ligne (navigator.onLine + événements online/offline)
-  useEffect(() => {
-    setIsOffline(!navigator.onLine);
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
   // Fetch Discovery status for the gauge
   useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
     const fetchDiscoveryStatus = async () => {
       try {
         const status = await getDiscoveryStatus();
         setDiscoveryStatus(status);
-        // Sauvegarder dans localStorage pour éviter le clignotement au rechargement
         if (status && user?.id) {
           localStorage.setItem(`discovery_status_${user.id}`, JSON.stringify(status));
         }
       } catch (error) {
-        // En cas d'erreur, NE PAS effacer le status - garder la valeur précédente
-        // Cela évite le clignotement de la barre
         logger.warn('Erreur fetch discovery status:', error);
+        // 401 répétés → arrêter le polling (token expiré)
+        const is401 = error instanceof Error && error.message?.includes('401');
+        if (is401 && intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
       }
     };
 
     if (user?.id) {
-      // Charger d'abord depuis localStorage pour éviter le clignotement initial
       const cached = localStorage.getItem(`discovery_status_${user.id}`);
       if (cached && !discoveryStatus) {
         try {
@@ -233,9 +220,10 @@ const Sidebar: React.FC<SidebarProps> = ({
       }
 
       fetchDiscoveryStatus();
-      // Polling toutes les 30 secondes pour mettre à jour la jauge
-      const interval = setInterval(fetchDiscoveryStatus, 30000);
-      return () => clearInterval(interval);
+      intervalId = setInterval(fetchDiscoveryStatus, 30000);
+      return () => {
+        if (intervalId) clearInterval(intervalId);
+      };
     }
   }, [user?.id]);
 
@@ -259,22 +247,18 @@ const Sidebar: React.FC<SidebarProps> = ({
       });
     } catch (error) {
       logger.error('Échec du chargement du profil:', error);
-      // Offline ou erreur réseau : utiliser le cache pour garder nom + photo visibles
-      const cached = getCachedProfile();
-      if (cached && user && cached.id === user.id) {
-        setUserProfile({
-          ...cached,
-          profile_picture_url: cached.profile_picture_url || cachedProfilePicture || null,
-        });
-      } else if (user && !userProfile) {
+      // Seulement mettre à jour si on n'a pas déjà un profil en cache
+      // Cela évite de perdre l'image pendant la navigation
+      if (user && !userProfile) {
         setUserProfile({
           id: user.id,
           email: user.username,
           full_name: user.name || '',
-          profile_picture_url: cachedProfilePicture || null,
+          profile_picture_url: cachedProfilePicture || null, // Garder l'image en cache si disponible
           created_at: new Date().toISOString(),
         });
       }
+      // Si on a déjà un profil, ne rien faire pour garder l'image
     }
   };
 
@@ -472,6 +456,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   }> = ({ item, isActive }) => {
     const { Icon } = item;
     const isRecordingItem = item.id === 'dashboard' && isRecording;
+
     // Map item id to tour target
     const getTourTarget = () => {
       switch (item.id) {
@@ -653,34 +638,6 @@ const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Indicateur hors ligne (compact, intégré à la sidebar) */}
-      <AnimatePresence>
-        {isOffline && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2 }}
-            className={cn('overflow-hidden', isCollapsed ? 'mx-2 mb-2' : 'mx-3 mb-2')}
-          >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className={cn(
-                  'flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs font-medium',
-                  isCollapsed ? 'justify-center p-2' : 'px-3 py-2'
-                )}>
-                  <WifiOff className="w-3.5 h-3.5 flex-shrink-0" />
-                  {!isCollapsed && <span>Pas de connexion</span>}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent side="right" className="bg-white text-amber-800 border-amber-200">
-                Pas de connexion
-              </TooltipContent>
-            </Tooltip>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Divider */}
       <div className="mx-4 border-t border-gray-100" />
 
@@ -747,7 +704,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       {!isCollapsed && (
         <div className="flex-shrink-0 border-t border-gray-100 p-4 text-center">
           <p className="text-[10px] text-gray-400">Propulsé par Lexia France</p>
-          <p className="text-[9px] text-gray-300 mt-0.5">Version 1.3.1 Desktop</p>
+          <p className="text-[9px] text-gray-300 mt-0.5">Version 1.1.2</p>
         </div>
       )}
 
@@ -859,8 +816,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         animate={isCollapsed ? 'collapsed' : 'expanded'}
         transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
         className={cn(
-          "relative h-screen flex-shrink-0",
-          // Floating effect with shadow
+          "relative h-screen flex-shrink-0 z-[40]",
+          // Floating effect with shadow - z-40 garde sidebar + languette au même plan (sous overlays 50+)
           !isCollapsed && "shadow-[4px_0_24px_rgba(0,0,0,0.06)]"
         )}
         style={{
@@ -889,7 +846,7 @@ const Sidebar: React.FC<SidebarProps> = ({
               top: '50%',
               transform: 'translateY(-50%)',
               right: -20,
-              zIndex: 1000,
+              zIndex: 1,
               width: 20,
               height: 56,
               display: 'flex',

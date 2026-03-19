@@ -74,127 +74,142 @@ export interface UploadOptions {
   signal?: AbortSignal; // Permettre l'annulation
 }
 
+/** Retourne true si l'erreur est retentable (5xx, 429, réseau) */
+function isRetryableUploadError(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'AbortError') return false;
+  if (error instanceof DOMException && error.name === 'AbortError') return false;
+  const msg = error instanceof Error ? error.message : String(error);
+  const statusMatch = msg.match(/Upload failed \((\d+)\)/);
+  if (statusMatch) {
+    const status = parseInt(statusMatch[1], 10);
+    if (status === 429) return true; // Rate limit
+    if (status >= 500 && status < 600) return true; // Server error
+    return false; // 4xx (sauf 429) = client error, pas de retry
+  }
+  // Erreur réseau, timeout, etc.
+  return true;
+}
+
+/** Délai en ms avant retry (backoff exponentiel: 2s, 4s, 8s) */
+function getRetryDelayMs(attempt: number): number {
+  return Math.min(2000 * Math.pow(2, attempt), 8000);
+}
+
 /**
  * Upload an audio file and create a new meeting
+ * Retry avec backoff exponentiel (2s, 4s, 8s) sur erreurs réseau, 5xx, 429
  */
 export async function uploadMeeting(
   audioFile: File,
   title: string,
   options?: UploadOptions
 ): Promise<Meeting> {
-  try {
+  const url = `/simple/meetings/upload`;
+  const endpoint = `${API_BASE_URL}${url}`;
+  const token = localStorage.getItem('auth_token');
+
+  const MAX_ATTEMPTS = 4; // 1 initial + 3 retries
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const formData = new FormData();
     formData.append('file', audioFile);
     formData.append('title', title);
+    try {
+      let response: Meeting;
 
-    // Utiliser le nouvel endpoint simplifié
-    // Le titre est maintenant passé dans FormData pour éviter les problèmes avec les caractères spéciaux comme "/"
-    let url = `/simple/meetings/upload`;
-    
-    const endpoint = `${API_BASE_URL}${url}`;
-    const token = localStorage.getItem('auth_token');
-
-    let response: Meeting;
-
-    if (options?.onProgress && typeof XMLHttpRequest !== 'undefined') {
-      // Utiliser XHR pour suivre précisément la progression
-      response = await new Promise<Meeting>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', endpoint, true);
-        // Timeout généreux pour les gros fichiers (1h d'audio ≈ 200-500Mo)
-        xhr.timeout = 30 * 60 * 1000; // 30 minutes
-        if (token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-        }
-
-        // Support annulation
-        const abortHandler = () => {
-          try { xhr.abort(); } catch {}
-          reject(new DOMException('Aborted', 'AbortError'));
-        };
-        if (options?.signal) {
-          options.signal.addEventListener('abort', abortHandler, { once: true });
-        }
-
-        // Démarrer la progression immédiatement à 2% pour donner un feedback visuel
-        let hasStartedRealProgress = false;
-        let simulatedProgress = 2;
-        const startTime = Date.now();
-        
-        // Simuler une progression initiale lente (2% -> 5% en 500ms)
-        const progressInterval = setInterval(() => {
-          if (!hasStartedRealProgress && simulatedProgress < 5) {
-            simulatedProgress = Math.min(5, 2 + ((Date.now() - startTime) / 500) * 3);
-            if (options?.onProgress) {
-              options.onProgress(Math.round(simulatedProgress));
-            }
-          } else {
-            clearInterval(progressInterval);
+      if (options?.onProgress && typeof XMLHttpRequest !== 'undefined') {
+        response = await new Promise<Meeting>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', endpoint, true);
+          if (token) {
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
           }
-        }, 50);
 
-        xhr.upload.onprogress = (evt) => {
-          if (evt.lengthComputable && options?.onProgress) {
-            hasStartedRealProgress = true;
-            clearInterval(progressInterval);
-            // Utiliser la progression réelle, mais s'assurer qu'elle est au moins à 5%
-            const realPercent = Math.round((evt.loaded / evt.total) * 100);
-            const percent = Math.max(5, realPercent);
-            options.onProgress(percent);
+          const abortHandler = () => {
+            try { xhr.abort(); } catch {}
+            reject(new DOMException('Aborted', 'AbortError'));
+          };
+          if (options?.signal) {
+            options.signal.addEventListener('abort', abortHandler, { once: true });
           }
-        };
 
-        xhr.onerror = () => {
-          clearInterval(progressInterval);
-          reject(new Error('Network error during upload'));
-        };
-        xhr.ontimeout = () => {
-          clearInterval(progressInterval);
-          reject(new Error('Upload timeout — le fichier est trop volumineux ou la connexion est trop lente'));
-        };
-        xhr.onreadystatechange = () => {
-          if (xhr.readyState === 4) {
-            clearInterval(progressInterval);
-            if (xhr.status >= 200 && xhr.status < 300) {
-              try {
-                const json = JSON.parse(xhr.responseText) as Meeting;
-                // S'assurer que la progression est à 100% à la fin
-                if (options?.onProgress) {
-                  options.onProgress(100);
-                }
-                resolve(json);
-              } catch (e) {
-                reject(new Error('Invalid JSON response'));
+          let hasStartedRealProgress = false;
+          let simulatedProgress = 2;
+          const startTime = Date.now();
+
+          const progressInterval = setInterval(() => {
+            if (!hasStartedRealProgress && simulatedProgress < 5) {
+              simulatedProgress = Math.min(5, 2 + ((Date.now() - startTime) / 500) * 3);
+              if (options?.onProgress) {
+                options.onProgress(Math.round(simulatedProgress));
               }
             } else {
-              reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
+              clearInterval(progressInterval);
             }
-          }
-        };
+          }, 50);
 
-        xhr.send(formData);
-      });
-    } else {
-      // Fallback fetch (pas d'événements de progression nativement)
-      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
-      const controller = new AbortController();
-      const signal = options?.signal || controller.signal;
-      const res = await fetch(endpoint, { method: 'POST', headers, body: formData, signal });
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Upload failed (${res.status}): ${errText}`);
+          xhr.upload.onprogress = (evt) => {
+            if (evt.lengthComputable && options?.onProgress) {
+              hasStartedRealProgress = true;
+              clearInterval(progressInterval);
+              const realPercent = Math.round((evt.loaded / evt.total) * 100);
+              const percent = Math.max(5, realPercent);
+              options.onProgress(percent);
+            }
+          };
+
+          xhr.onerror = () => {
+            clearInterval(progressInterval);
+            reject(new Error('Network error during upload'));
+          };
+          xhr.onreadystatechange = () => {
+            if (xhr.readyState === 4) {
+              clearInterval(progressInterval);
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                  const json = JSON.parse(xhr.responseText) as Meeting;
+                  if (options?.onProgress) options.onProgress(100);
+                  resolve(json);
+                } catch (e) {
+                  reject(new Error('Invalid JSON response'));
+                }
+              } else {
+                reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
+              }
+            }
+          };
+
+          xhr.send(formData);
+        });
+      } else {
+        const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+        const controller = new AbortController();
+        const signal = options?.signal || controller.signal;
+        const res = await fetch(endpoint, { method: 'POST', headers, body: formData, signal });
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error(`Upload failed (${res.status}): ${errText}`);
+        }
+        response = (await res.json()) as Meeting;
       }
-      response = (await res.json()) as Meeting;
-    }
-    
-    if (!response.id) {
-      throw new Error('Server did not return a valid meeting ID');
-    }
 
-    return response;
-  } catch (error) {
-    throw error;
+      if (!response.id) {
+        throw new Error('Server did not return a valid meeting ID');
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableUploadError(error) || attempt === MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+      const delayMs = getRetryDelayMs(attempt);
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
   }
+
+  throw lastError;
 }
 
 /**
@@ -205,17 +220,18 @@ export async function uploadMeeting(
  */
 export async function getMeeting(
   meetingId: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; isPolling?: boolean } = {},
   retryCount: number = 0
 ): Promise<Meeting | null> {
-  const { signal } = options;
+  const { signal, isPolling = false } = options;
 
   try {
     // Récupérer depuis l'API avec signal d'abort en utilisant le nouvel endpoint simplifié
+    // isPolling: évite de déclencher logout (verifyTokenValidity) sur 401 pendant le polling
     const response = await apiClient.get<Meeting>(
       `/simple/meetings/${meetingId}`,
       true,  // withAuth = true
-      { signal }  // options avec signal
+      { signal, ignoreError: isPolling }  // ignoreError évite logout sur 401 pendant polling
     );
 
     if (!response || !response.id) {
@@ -227,25 +243,24 @@ export async function getMeeting(
     
     return normalizedMeeting;
   } catch (error) {
-    // Gérer l'erreur 404 spécifiquement
-    if (error instanceof Error) {
-      // Vérifier si c'est une erreur 401 (Unauthorized)
-      if (error.message.includes('401')) {
-        // Check if we have a token at all
-        const token = localStorage.getItem('auth_token');
-        if (!token || retryCount >= 2) {
-          return null;
-        }
-
-        // Essayer de réessayer la requête après une courte pause
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        return getMeeting(meetingId, options, retryCount + 1);
-      }
-
-      // Vérifier si c'est une erreur 404 (Not Found)
-      if (error.message.includes('404') || error.message.includes('not found')) {
+    // Gérer l'erreur 401 (Unauthorized) - token expiré ou invalide
+    const is401 = error instanceof Error && error.message?.includes('401') ||
+      (error && typeof error === 'object' && 'status' in error && (error as { status?: number }).status === 401) ||
+      (error && typeof error === 'object' && 'detail' in error && String((error as { detail?: unknown }).detail).toLowerCase().includes('credential'));
+    if (is401) {
+      const token = localStorage.getItem('auth_token');
+      if (!token || retryCount >= 3) {
         return null;
       }
+      // En mode polling : ne pas appeler verifyTokenValidity (évite logout)
+      // Simplement réessayer après une pause (le token peut être en cours de refresh)
+      await new Promise(resolve => setTimeout(resolve, isPolling ? 2000 : 1000));
+      return getMeeting(meetingId, options, retryCount + 1);
+    }
+
+    // Gérer l'erreur 404 (Not Found)
+    if (error instanceof Error && (error.message?.includes('404') || error.message?.includes('not found'))) {
+      return null;
     }
 
     // Si c'est une erreur d'abort, ne rien faire
@@ -307,13 +322,15 @@ export async function getTranscriptionWithDiarization(meetingId: string): Promis
 
 /**
  * Get the transcript for a meeting
+ * @param options.isPolling - Si true, ignoreError évite logout sur 401 pendant le polling
  */
-export async function getTranscript(meetingId: string): Promise<TranscriptResponse> {
+export async function getTranscript(meetingId: string, options?: { isPolling?: boolean }): Promise<TranscriptResponse> {
   try {
     // Récupérer les détails de la réunion via l'endpoint simplifié (contient la transcription)
     const response = await apiClient.get<any>(
       `/simple/meetings/${meetingId}`,
-      true
+      true,
+      { ignoreError: options?.isPolling }
     );
 
     // Convertir en format TranscriptResponse
@@ -703,7 +720,7 @@ export function watchTranscriptionStatus(
     if (stopPolling) return;
 
     try {
-      const meeting = await getMeeting(meetingId);
+      const meeting = await getMeeting(meetingId, { isPolling: true });
 
       if (!meeting) {
         stopPolling = true;
@@ -787,11 +804,12 @@ export function watchTranscriptionStatus(
 
 /**
  * Get detailed meeting info including duration and participant count
+ * @param options.isPolling - Si true, ignoreError évite logout sur 401 pendant le polling
  */
-export async function getMeetingDetails(meetingId: string): Promise<Meeting> {
+export async function getMeetingDetails(meetingId: string, options?: { isPolling?: boolean }): Promise<Meeting> {
   try {
     // Utiliser la fonction getMeeting pour récupérer les données complètes de la réunion
-    const meetingData = await getMeeting(meetingId);
+    const meetingData = await getMeeting(meetingId, { isPolling: options?.isPolling });
 
     // Si meeting est null, c'est probablement qu'il a été supprimé
     if (!meetingData) {

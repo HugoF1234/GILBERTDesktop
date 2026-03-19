@@ -474,10 +474,41 @@ const UserDetailsPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-8 w-8 animate-spin text-slate-500" />
-          <p className="text-slate-600">Chargement des détails utilisateur...</p>
+      <div className="min-h-screen bg-slate-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+          <div className="h-10 w-48 rounded-lg bg-slate-200 animate-pulse mb-8" />
+          <div className="h-10 w-64 rounded-lg bg-slate-200 animate-pulse mb-2" />
+          <div className="h-4 w-48 rounded bg-slate-200 animate-pulse mb-8" />
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="space-y-6">
+              <div className="rounded-lg border border-slate-200 p-6">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-16 h-16 rounded-full bg-slate-200 animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-5 w-3/4 rounded bg-slate-200 animate-pulse" />
+                    <div className="h-4 w-1/2 rounded bg-slate-200 animate-pulse" />
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-4 w-full rounded bg-slate-200 animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="lg:col-span-2 space-y-6">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="rounded-lg border border-slate-200 p-6">
+                  <div className="h-6 w-32 rounded bg-slate-200 animate-pulse mb-4" />
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((j) => (
+                      <div key={j} className="h-4 w-full rounded bg-slate-200 animate-pulse" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );

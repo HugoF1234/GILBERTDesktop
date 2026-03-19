@@ -48,11 +48,11 @@ const TipTapEditor = lazy(() => import('./TipTapEditor'));
 const DrawingCanvas = lazy(() => import('./ui/DrawingCanvas'));
 import SummaryGenerator from './SummaryGenerator';
 import { Template } from '../services/templateService';
-import { getAssetUrl } from '../services/apiClient';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useGenerationStore } from '../stores/generationStore';
 import sounds from '../utils/soundDesign';
 import { getDiscoveryStatus, DiscoveryStatus } from '../services/profileService';
+import { retryTranscription } from '../services/meetingService';
 import LockIcon from '@mui/icons-material/Lock';
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch';
 import { logger } from '@/utils/logger';
@@ -346,7 +346,7 @@ const RegenerateDropdown: React.FC<RegenerateDropdownProps> = ({
           >
             <Box
               component="img"
-              src={getAssetUrl(selectedTemplate?.logo_url) || '/img/icon.png'}
+              src={selectedTemplate?.logo_url || '/img/icon.png'}
               alt=""
               draggable={false}
               sx={{ width: 20, height: 20, objectFit: 'contain' }}
@@ -438,7 +438,7 @@ const RegenerateDropdown: React.FC<RegenerateDropdownProps> = ({
                   >
                     <Box
                       component="img"
-                      src={getAssetUrl(template.logo_url) || '/img/icon.png'}
+                      src={template.logo_url || '/img/icon.png'}
                       alt=""
                       draggable={false}
                       sx={{ width: 18, height: 18, objectFit: 'contain' }}
@@ -547,7 +547,7 @@ interface MeetingDetailOverlayProps {
   // Transcription
   formattedTranscript: TranscriptEntry[] | null;
   isLoadingTranscript: boolean;
-  onLoadTranscript: (meetingId: string) => Promise<void>;
+  onLoadTranscript: (meetingId: string, options?: { isPolling?: boolean }) => Promise<void>;
   // Speaker management
   onSaveSpeakerName: (speakerId: string, customName: string) => void;
   hasCustomName: (meetingId: string, speakerId: string) => boolean;
@@ -805,15 +805,24 @@ const MeetingDetailOverlay: React.FC<MeetingDetailOverlayProps> = ({
   }, [formattedTranscript, transcriptStatus]);
 
   // Auto-refresh polling when transcription is processing
+  // Arrête le polling après 401 pour éviter le spam de requêtes non authentifiées
   useEffect(() => {
     if (!open || !meeting || !isTranscriptProcessing) return;
 
-    // Start polling immediately and then every 3 seconds
-    const pollInterval = setInterval(() => {
-      onLoadTranscript(meeting.id);
-    }, 3000); // Poll every 3 seconds for faster response
+    let intervalId: ReturnType<typeof setInterval> | null = setInterval(() => {
+      onLoadTranscript(meeting.id, { isPolling: true }).catch((err: unknown) => {
+        const is401 = err instanceof Error && err.message?.includes('401') ||
+          (err && typeof err === 'object' && 'status' in err && (err as { status?: number }).status === 401);
+        if (is401 && intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      });
+    }, 3000);
 
-    return () => clearInterval(pollInterval);
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [open, meeting?.id, isTranscriptProcessing, onLoadTranscript]);
 
   useEffect(() => {
@@ -1772,6 +1781,83 @@ const MeetingDetailOverlay: React.FC<MeetingDetailOverlayProps> = ({
                     >
                       Chargement des échanges...
                     </Typography>
+                  </Box>
+                ) : transcriptStatus === 'error' ? (
+                  /* ── État d'erreur : message clair, sans détails techniques ── */
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      py: 8,
+                      px: 4,
+                      width: '100%',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <Box
+                      sx={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: '50%',
+                        bgcolor: alpha(theme.palette.error.main, 0.1),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        mb: 3,
+                      }}
+                    >
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke={theme.palette.error.main} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                      </svg>
+                    </Box>
+                    <Typography variant="subtitle1" fontWeight={600} color="text.primary" sx={{ mb: 1 }}>
+                      La transcription a échoué
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 360, mb: 3 }}>
+                      {meeting?.transcript_text && !meeting.transcript_text.includes('invalid_request') && !meeting.transcript_text.startsWith('{')
+                        ? meeting.transcript_text
+                        : 'Une erreur est survenue lors de la transcription. Vous pouvez réessayer.'}
+                    </Typography>
+                    <Box
+                      component="button"
+                      onClick={async () => {
+                        if (!meeting?.id) return;
+                        try {
+                          await retryTranscription(meeting.id);
+                          onLoadTranscript(meeting.id);
+                        } catch {
+                          onLoadTranscript(meeting.id);
+                        }
+                      }}
+                      sx={{
+                        px: 3,
+                        py: 1.25,
+                        borderRadius: '10px',
+                        border: `1.5px solid ${theme.palette.primary.main}`,
+                        bgcolor: 'transparent',
+                        color: theme.palette.primary.main,
+                        fontWeight: 600,
+                        fontSize: '0.875rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1,
+                        transition: 'all 0.2s',
+                        '&:hover': {
+                          bgcolor: alpha(theme.palette.primary.main, 0.08),
+                        },
+                      }}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                      </svg>
+                      Relancer la transcription
+                    </Box>
                   </Box>
                 ) : formattedTranscript && formattedTranscript.length > 0 ? (
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>

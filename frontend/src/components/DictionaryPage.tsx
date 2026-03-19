@@ -218,10 +218,16 @@ const DictionaryPage: React.FC = () => {
             </div>
           </motion.div>
 
-          {/* ── Loading ── */}
+          {/* ── Loading skeleton ── */}
           {loading && (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-7 w-7 animate-spin text-[#C7C7CC]" />
+            <div className="space-y-4 py-4">
+              <div className="h-10 w-3/4 mx-auto rounded-lg bg-slate-200/80 animate-pulse" />
+              <div className="h-10 w-1/2 mx-auto rounded-lg bg-slate-200/80 animate-pulse" />
+              <div className="space-y-3 mt-8">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-12 rounded-xl bg-slate-200/80 animate-pulse" style={{ width: `${85 - i * 8}%` }} />
+                ))}
+              </div>
             </div>
           )}
 

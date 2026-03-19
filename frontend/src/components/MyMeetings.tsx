@@ -1475,13 +1475,16 @@ const MyMeetings: React.FC<MyMeetingsProps> = ({ user: _user, isMobile: _isMobil
   };
 
   // Charger la transcription pour l'overlay
-  const handleLoadTranscriptForOverlay = async (meetingId: string) => {
-    logger.debug('[Transcript] 🔄 Loading transcript for meeting:', meetingId);
-    setIsLoadingTranscript(true);
+  const handleLoadTranscriptForOverlay = async (meetingId: string, options?: { isPolling?: boolean }) => {
+    logger.debug('[Transcript] 🔄 Loading transcript for meeting:', meetingId, options?.isPolling ? '(polling)' : '');
+    if (!options?.isPolling) {
+      setIsLoadingTranscript(true);
+    }
     try {
       // Utiliser le même endpoint que handleViewTranscript
+      // isPolling: ignoreError évite logout sur 401 pendant le polling de transcription
       const endpoint = `/simple/meetings/${meetingId}`;
-      const response = await apiClient.get(endpoint) as Record<string, unknown>;
+      const response = await apiClient.get(endpoint, true, { ignoreError: options?.isPolling }) as Record<string, unknown>;
 
       logger.debug('[Transcript] 📥 API Response received:', {
         hasData: !!response,
@@ -1569,8 +1572,11 @@ const MyMeetings: React.FC<MyMeetingsProps> = ({ user: _user, isMobile: _isMobil
       }
     } catch (err) {
       logger.error('[Transcript] ❌ Error loading transcript:', err);
-      showErrorPopup('Erreur', 'Impossible de charger la transcription');
-      setFormattedTranscript(null);
+      if (!options?.isPolling) {
+        showErrorPopup('Erreur', 'Impossible de charger la transcription');
+        setFormattedTranscript(null);
+      }
+      // En mode polling, on garde l'état actuel (évite flash d'erreur pendant 401 temporaire)
     } finally {
       setIsLoadingTranscript(false);
       logger.debug('[Transcript] 🏁 Loading complete');

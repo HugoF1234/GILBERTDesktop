@@ -2,6 +2,20 @@
 // Inspired by high-end apps: barely noticeable, dry, sophisticated
 // Rule: Less is more. Only important actions get sounds.
 
+const SOUND_DESIGN_STORAGE_KEY = 'gilbert_sound_design_enabled';
+
+export const getSoundDesignEnabled = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  const stored = localStorage.getItem(SOUND_DESIGN_STORAGE_KEY);
+  if (stored === null) return true; // Activé par défaut
+  return stored === 'true';
+};
+
+export const setSoundDesignEnabled = (enabled: boolean): void => {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(SOUND_DESIGN_STORAGE_KEY, String(enabled));
+};
+
 let audioContext: AudioContext | null = null;
 
 const getAudioContext = (): AudioContext => {
@@ -213,6 +227,7 @@ type SoundType =
   | 'softTab';   // Same as tab
 
 export const playSound = (type: SoundType): void => {
+  if (!getSoundDesignEnabled()) return;
   if (prefersReducedMotion()) return;
 
   try {

@@ -20,8 +20,8 @@ const PARTICLE_CONFIGS = [
 ];
 
 const COLORS = [
-  '#3B82F6', '#10B981', '#8B5CF6', '#F59E0B',
-  '#EC4899', '#06B6D4', '#EF4444', '#84CC16',
+  '#10B981', '#34D399', '#059669', '#047857',
+  '#6EE7B7', '#5EEAD4', '#2DD4BF', '#14B8A6',
 ];
 
 const ShareIcon = (
@@ -39,21 +39,21 @@ const ShareValidation: React.FC<ShareValidationProps> = ({ show, onComplete }) =
     <ConfirmationDialog
       open={show}
       onClose={onComplete}
-      variant="info"
+      variant="default"
       displayMode="icon"
-      primaryColor="#3B82F6"
-      secondaryColor="#60A5FA"
+      primaryColor="#10b981"
+      secondaryColor="#34D399"
       particleColors={COLORS}
       particleConfigs={PARTICLE_CONFIGS}
-      iconShadow="0 8px 32px rgba(59, 130, 246, 0.4)"
+      iconShadow="0 8px 32px rgba(16, 185, 129, 0.4)"
       icon={ShareIcon}
       soundType="save"
       dismissDelay={2500}
       exitDelay={500}
       useTriggeredGuard={true}
       rippleConfigs={[
-        { scale: 2.2, opacity: 0.6, duration: 1, delay: 0, borderColor: '#3B82F6' },
-        { scale: 2.5, opacity: 0.4, duration: 1.3, delay: 0.15, borderColor: '#60A5FA' },
+        { scale: 2.2, opacity: 0.6, duration: 1, delay: 0, borderColor: '#10b981' },
+        { scale: 2.5, opacity: 0.4, duration: 1.3, delay: 0.15, borderColor: '#34D399' },
       ]}
     />
   );

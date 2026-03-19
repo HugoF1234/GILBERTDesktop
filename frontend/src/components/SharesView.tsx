@@ -31,7 +31,7 @@ import {
   OutgoingShareHistoryEntry,
   ShareRole,
 } from '../services/shareService';
-import { getMeetingDetails, getTranscript, Meeting as ApiMeeting, updateMeetingTitle } from '../services/meetingService';
+import { getMeetingDetails, getTranscript, Meeting as ApiMeeting, updateMeetingTitle, deleteMeeting } from '../services/meetingService';
 import { formatImageUrl } from '../services/profileService';
 import {
   getMyOrganizations,
@@ -46,6 +46,13 @@ import {
 import { getAllMeetings } from '../services/meetingService';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from './ui/dialog';
 import { cn } from '@/lib/utils';
 
 // Étendre le type Meeting pour inclure les propriétés de partage
@@ -75,6 +82,7 @@ import { updateMeetingTranscriptText } from '../services/meetingService';
 import { useRouteContext } from '../hooks/useRouteContext';
 import { useDataStore } from '../stores/dataStore';
 import { logger } from '@/utils/logger';
+import ShareValidation from './ui/ShareValidation';
 
 interface SharesViewProps {
   user?: User | null;
@@ -202,6 +210,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
   const [shareShortcutIncludeTranscript, setShareShortcutIncludeTranscript] = useState(false);
   const [loadingShareMeetings, setLoadingShareMeetings] = useState(false);
   const [sharingInProgress, setSharingInProgress] = useState(false);
+  const [showShareSuccess, setShowShareSuccess] = useState(false);
 
   const [formattedTranscript, setFormattedTranscript] = useState<Array<{speakerId: string; speaker: string; text: string; timestamp?: string}> | null>(null);
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false);
@@ -273,13 +282,13 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
           const firstError = (results[0] as PromiseRejectedResult).reason;
           // Ne pas afficher d'erreur si c'est juste une erreur d'authentification
           if (firstError?.detail !== 'Not authenticated' && firstError?.message !== 'Not authenticated') {
-            showErrorPopup('Erreur', 'Impossible de charger les partages');
+            showErrorPopup('Erreur', 'Impossible de charger les partages. Vérifiez votre connexion ou réessayez plus tard.');
           }
         }
       } catch (error: any) {
         logger.error('Erreur lors du chargement des partages:', error);
         if (error?.detail !== 'Not authenticated' && error?.message !== 'Not authenticated') {
-          showErrorPopup('Erreur', 'Impossible de charger les partages');
+          showErrorPopup('Erreur', 'Impossible de charger les partages. Vérifiez votre connexion ou réessayez plus tard.');
         }
       } finally {
         setLoading(false);
@@ -355,7 +364,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       setMeetingsWithSummary(withSummary);
     } catch (e) {
       logger.error('SharesView: getAllMeetings failed', e);
-      showErrorPopup('Erreur', 'Impossible de charger vos réunions');
+      showErrorPopup('Erreur', 'Impossible de charger vos réunions. Vérifiez votre connexion.');
     } finally {
       setLoadingShareMeetings(false);
     }
@@ -379,19 +388,22 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
         const contact = selectedConversation.contact as Contact;
         const shareId = contact.contact_share_id;
         if (!shareId) {
-          showErrorPopup('Erreur', 'Ce contact ne peut pas recevoir de partage');
+          showErrorPopup('Erreur', 'Ce contact ne peut pas recevoir de partage. Vérifiez qu\'il est bien inscrit sur la plateforme.');
           return;
         }
         await shareMeeting(meetingId, shareId, shareShortcutRole, shareShortcutIncludeTranscript);
         const history = await getOutgoingShareHistory();
         setOutgoingHistory(history);
       }
+      // Fermer l'overlay immédiatement pour un feedback instantané
       setShareShortcutOpen(false);
       setShareShortcutStep(1);
       setSelectedMeetingForShare(null);
+      // Afficher l'animation de succès (comme enregistrement ou suppression)
+      setShowShareSuccess(true);
     } catch (err) {
       logger.error('SharesView: share failed', err);
-      showErrorPopup('Erreur', selectedOrganization ? 'Impossible de partager avec l\'organisation' : 'Impossible de partager avec ce contact');
+      showErrorPopup('Erreur', selectedOrganization ? 'Impossible de partager avec l\'organisation. Vérifiez votre connexion et vos droits.' : 'Impossible de partager avec ce contact. Vérifiez votre connexion.');
     } finally {
       setSharingInProgress(false);
     }
@@ -677,7 +689,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
         setConversationMessages(messages);
       } catch (error) {
         logger.error('Erreur lors du chargement des messages:', error);
-        showErrorPopup('Erreur', 'Impossible de charger les messages');
+        showErrorPopup('Erreur', 'Impossible de charger les messages de cette conversation. Réessayez.');
       } finally {
         setLoadingMessages(false);
       }
@@ -761,7 +773,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       setSelectedTemplateId(details.template_id || null);
     } catch (error) {
       logger.error('Error loading meeting details for overlay:', error);
-      showErrorPopup('Erreur', 'Impossible de charger les détails de la réunion.');
+      showErrorPopup('Erreur', 'Impossible de charger les détails de la réunion. Vérifiez votre connexion.');
     } finally {
       setIsLoadingTranscript(false);
     }
@@ -778,16 +790,18 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
     setEditedSummaryText('');
   };
 
-  const handleLoadTranscript = async (meetingId: string) => {
+  const handleLoadTranscript = async (meetingId: string, opts?: { isPolling?: boolean }) => {
     if (!selectedMeeting || !overlayMeeting) return;
 
     if (overlayMeeting.is_shared && overlayMeeting.permissions?.include_transcript !== true) {
       return;
     }
 
-    setIsLoadingTranscript(true);
+    if (!opts?.isPolling) {
+      setIsLoadingTranscript(true);
+    }
     try {
-      const transcriptResponse = await getTranscript(meetingId);
+      const transcriptResponse = await getTranscript(meetingId, opts);
       const transcript = typeof transcriptResponse === 'string' ? transcriptResponse : transcriptResponse.transcript_text || '';
       if (transcript) {
         const lines = transcript.split(/\n\n|\n/).filter((line: string) => line.trim());
@@ -805,7 +819,9 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       }
     } catch (error) {
       logger.error('Erreur lors du chargement de la transcription:', error);
-      showErrorPopup('Erreur', 'Impossible de charger la transcription');
+      if (!opts?.isPolling) {
+        showErrorPopup('Erreur', 'Impossible de charger la transcription. Le fichier est peut-être en cours de traitement.');
+      }
     } finally {
       setIsLoadingTranscript(false);
     }
@@ -870,7 +886,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       setIsEditingTranscript(false);
     } catch (error) {
       logger.error('Erreur lors de la sauvegarde de la transcription:', error);
-      showErrorPopup('Erreur', 'Impossible de sauvegarder la transcription');
+      showErrorPopup('Erreur', 'Impossible de sauvegarder la transcription. Vérifiez vos droits d\'édition.');
     } finally {
       setIsSavingTranscript(false);
     }
@@ -926,17 +942,31 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
     showErrorPopup('Info', 'La génération de résumé n\'est pas disponible pour les réunions partagées');
   };
 
-  const handleDelete = (_meetingId: string) => {
-    showErrorPopup('Info', 'La suppression n\'est pas disponible pour les réunions partagées');
-  };
+  const handleDelete = useCallback(async (meetingId: string) => {
+    // Seul le propriétaire peut supprimer (réunions reçues = is_shared, pas de suppression)
+    if (overlayMeeting?.is_shared) {
+      showErrorPopup('Accès refusé', 'Seul le propriétaire peut supprimer cette réunion.');
+      return;
+    }
+    try {
+      await deleteMeeting(meetingId);
+      useDataStore.getState().removeMeeting(meetingId);
+      useDataStore.getState().invalidateSharedMeetings();
+      useDataStore.getState().fetchSharedMeetings(true);
+      const history = await getOutgoingShareHistory();
+      setOutgoingHistory(history);
+      setConversationMessages(prev => prev.filter(m => m.meeting.id !== meetingId));
+      handleCloseMeetingOverlay();
+    } catch (error) {
+      logger.error('SharesView: delete failed', error);
+      showErrorPopup('Erreur', 'Impossible de supprimer la réunion. Vérifiez votre connexion.');
+    }
+  }, [overlayMeeting?.is_shared, showErrorPopup]);
 
   const handleShare = async (_meeting: Meeting) => {
     showErrorPopup('Info', 'Le partage n\'est pas disponible depuis cette vue');
   };
 
-  const handlePlayAudio = (_meetingId: string, _title: string) => {
-    showErrorPopup('Info', 'La lecture audio sera disponible prochainement');
-  };
 
   const handleOpenEditPermissions = (message: ConversationMessage, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -963,7 +993,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       const shareId = contact?.contact_share_id;
 
       if (!shareId) {
-        showErrorPopup('Erreur', 'Impossible de trouver l\'identifiant de partage du contact');
+        showErrorPopup('Erreur', 'Impossible de trouver l\'identifiant de partage du contact. Réessayez ou contactez le support.');
         return;
       }
 
@@ -985,7 +1015,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       setEditPermissionsMessage(null);
     } catch (error) {
       logger.error('Erreur lors de la mise à jour des permissions:', error);
-      showErrorPopup('Erreur', 'Impossible de mettre à jour les permissions');
+      showErrorPopup('Erreur', 'Impossible de mettre à jour les permissions. Vérifiez votre connexion et réessayez.');
     } finally {
       setIsUpdatingPermissions(false);
     }
@@ -1144,8 +1174,8 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                       return (
                         <motion.div
                           key={om.id}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
                           className={cn("flex", isOutgoing ? "justify-end" : "justify-start")}
                         >
                           <div
@@ -1164,7 +1194,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                                 }
                               } catch (err) {
                                 logger.error('SharesView: getMeetingDetails failed', err);
-                                showErrorPopup('Erreur', 'Impossible d\'ouvrir la réunion');
+                                showErrorPopup('Erreur', 'Impossible d\'ouvrir la réunion. Vérifiez votre connexion ou que la réunion existe encore.');
                               }
                             }}
                             className={cn(
@@ -1236,8 +1266,6 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                         src={avatarUrl}
                         alt=""
                         className="w-full h-full object-cover"
-                        loading="lazy"
-                        decoding="async"
                         onError={() => setFailedAvatars(prev => new Set(prev).add(selectedConversation.contact.contact_user_id))}
                       />
                     );
@@ -1302,8 +1330,8 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                     return (
                       <motion.div
                         key={message.id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
                         transition={{ delay: index * 0.02 }}
                         className={cn(
                           "flex",
@@ -1602,8 +1630,8 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                   <motion.button
                     key={contact.contact_user_id}
                     onClick={() => { setSelectedConversation(conversation); setSelectedOrganization(null); }}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
                     transition={{ delay: index * 0.02 }}
                     className={cn(
                       "w-full flex items-center gap-2 sm:gap-3 rounded-lg sm:rounded-xl transition-all duration-150 text-left mb-0.5 sm:mb-1",
@@ -1624,8 +1652,6 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                           src={avatar}
                           alt=""
                           className="w-full h-full object-cover"
-                          loading="lazy"
-                          decoding="async"
                           onError={() => setFailedAvatars(prev => new Set(prev).add(contact.contact_user_id))}
                         />
                       ) : (
@@ -1803,7 +1829,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
                           >
                             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full overflow-hidden flex-shrink-0 bg-slate-200 flex items-center justify-center">
                               {avatarUrl ? (
-                                <img src={avatarUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                                <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
                               ) : (
                                 <span className="text-slate-600 font-semibold text-sm">
                                   {getInitials(name)}
@@ -1847,199 +1873,181 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
       </AnimatePresence>
 
       {/* Modal partage "+" : étape 1 = choix de l'échange (avec synthèse), étape 2 = paramètres (rôle + transcription) */}
-      <AnimatePresence>
-        {shareShortcutOpen && (selectedOrganization || selectedConversation) && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[1400] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-            onClick={() => {
-              if (!sharingInProgress) {
-                setShareShortcutOpen(false);
-                setShareShortcutStep(1);
-                setSelectedMeetingForShare(null);
-              }
-            }}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-              className="w-full sm:max-w-md h-[85vh] sm:min-h-[380px] sm:max-h-[85vh] flex flex-col bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-100 flex-shrink-0">
-                <h2 className="text-base sm:text-lg font-semibold text-slate-800">
-                  {shareShortcutStep === 1 ? 'Choisir l\'échange' : 'Paramètres du partage'}
-                </h2>
-                <button
-                  type="button"
-                  disabled={sharingInProgress}
-                  onClick={() => {
-                    if (!sharingInProgress) {
-                      if (shareShortcutStep === 2) {
-                        setShareShortcutStep(1);
-                        setSelectedMeetingForShare(null);
-                      } else {
-                        setShareShortcutOpen(false);
-                      }
-                    }
-                  }}
-                  className="p-2 rounded-lg hover:bg-slate-100 disabled:opacity-50"
+      <Dialog
+        open={shareShortcutOpen && !!(selectedOrganization || selectedConversation)}
+        onOpenChange={(open) => {
+          if (!open && !sharingInProgress) {
+            setShareShortcutOpen(false);
+            setShareShortcutStep(1);
+            setSelectedMeetingForShare(null);
+          }
+        }}
+      >
+        <DialogContent
+          showCloseButton={!sharingInProgress}
+          className="sm:max-w-md p-0 gap-0 overflow-hidden rounded-lg border-slate-200 flex flex-col h-[420px] max-h-[90vh]"
+          onInteractOutside={(e) => sharingInProgress && e.preventDefault()}
+          onEscapeKeyDown={(e) => sharingInProgress && e.preventDefault()}
+        >
+          <DialogHeader className="px-4 sm:px-6 py-4 border-b border-slate-100 text-left flex-shrink-0">
+            <DialogTitle className="text-base sm:text-lg font-semibold text-slate-800">
+              {shareShortcutStep === 1 ? 'Choisir l\'échange' : 'Paramètres du partage'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
+            <AnimatePresence mode="wait">
+              {shareShortcutStep === 1 ? (
+                <motion.div
+                  key="step1"
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -12 }}
+                  transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+                  className="flex flex-col"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 min-h-[280px] flex flex-col">
-                <AnimatePresence mode="wait">
-                  {shareShortcutStep === 1 ? (
-                    <motion.div
-                      key="step1"
-                      initial={{ opacity: 0, x: 12 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -12 }}
-                      transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-                      className="flex flex-col min-h-[240px]"
-                    >
-                      <p className="text-xs text-slate-500 mb-3">Réunions avec synthèse uniquement</p>
-                      {loadingShareMeetings ? (
-                        <div className="flex justify-center py-8 flex-1 items-center">
-                          <Loader2 className="w-8 h-8 text-slate-300 animate-spin" />
-                        </div>
-                      ) : meetingsWithSummary.length === 0 ? (
-                        <p className="text-sm text-slate-500 text-center py-6 flex-1 flex items-center justify-center">Aucune réunion avec synthèse à partager</p>
-                      ) : (
-                        <ul className="space-y-2">
-                          {meetingsWithSummary.map((m) => (
-                            <li key={m.id}>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSelectedMeetingForShare(m);
-                                  setShareShortcutStep(2);
-                                }}
-                                className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 text-left"
-                              >
-                                <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-medium text-slate-800 truncate">{m.title || m.name || 'Sans titre'}</p>
-                                  <p className="text-xs text-slate-500">{m.created_at ? formatTime(m.created_at) : ''}</p>
-                                </div>
-                                <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </motion.div>
+                  <p className="text-xs text-slate-500 mb-3">Réunions avec synthèse uniquement</p>
+                  {loadingShareMeetings ? (
+                    <div className="flex justify-center py-8 flex-1 items-center">
+                      <Loader2 className="w-8 h-8 text-slate-300 animate-spin" />
+                    </div>
+                  ) : meetingsWithSummary.length === 0 ? (
+                    <p className="text-sm text-slate-500 text-center py-6 flex-1 flex items-center justify-center">Aucune réunion avec synthèse à partager</p>
                   ) : (
-                    <motion.div
-                      key="step2"
-                      initial={{ opacity: 0, x: 12 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -12 }}
-                      transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
-                      className="flex flex-col min-h-[240px] items-center justify-center"
-                    >
-                      <div className="w-full max-w-sm flex flex-col gap-5">
-                        {selectedMeetingForShare && (
-                          <div className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                            <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
-                            <p className="font-medium text-slate-800 truncate text-sm">
-                              {selectedMeetingForShare.title || selectedMeetingForShare.name || 'Sans titre'}
-                            </p>
-                          </div>
-                        )}
-
-                        <div>
-                          <p className="text-sm font-medium text-slate-700 mb-2">Type d'accès</p>
-                          <div className="inline-flex p-1 bg-slate-100 rounded-xl" style={{ gap: 2 }}>
-                            <button
-                              type="button"
-                              onClick={() => setShareShortcutRole('reader')}
-                              className={cn(
-                                'relative z-10 px-4 py-2 text-sm font-medium rounded-[10px] transition-all duration-200',
-                                shareShortcutRole === 'reader'
-                                  ? 'bg-white text-blue-600 shadow-sm'
-                                  : 'text-slate-500 hover:text-slate-700'
-                              )}
-                            >
-                              Lecteur
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setShareShortcutRole('editor')}
-                              className={cn(
-                                'relative z-10 px-4 py-2 text-sm font-medium rounded-[10px] transition-all duration-200',
-                                shareShortcutRole === 'editor'
-                                  ? 'bg-white text-blue-600 shadow-sm'
-                                  : 'text-slate-500 hover:text-slate-700'
-                              )}
-                            >
-                              Éditeur
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-sm text-slate-700">Inclure la transcription</span>
+                    <ul className="space-y-2">
+                      {meetingsWithSummary.map((m) => (
+                        <li key={m.id}>
                           <button
                             type="button"
-                            role="switch"
-                            aria-checked={shareShortcutIncludeTranscript}
-                            onClick={() => setShareShortcutIncludeTranscript((v) => !v)}
-                            className={cn(
-                              'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
-                              shareShortcutIncludeTranscript ? 'bg-blue-500' : 'bg-slate-200'
-                            )}
+                            onClick={() => {
+                              setSelectedMeetingForShare(m);
+                              setShareShortcutStep(2);
+                            }}
+                            className="w-full flex items-center gap-3 p-3 rounded-lg border border-slate-100 hover:bg-slate-50 text-left"
                           >
-                            <span
-                              className={cn(
-                                'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition duration-200 translate-y-0',
-                                shareShortcutIncludeTranscript ? 'translate-x-5' : 'translate-x-0.5'
-                              )}
-                            />
+                            <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-slate-800 truncate">{m.title || m.name || 'Sans titre'}</p>
+                              <p className="text-xs text-slate-500">{m.created_at ? formatTime(m.created_at) : ''}</p>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
                           </button>
-                        </div>
-                      </div>
-                    </motion.div>
+                        </li>
+                      ))}
+                    </ul>
                   )}
-                </AnimatePresence>
-              </div>
-              <div className="px-4 py-3 border-t border-slate-100 flex gap-2 flex-shrink-0">
-                {shareShortcutStep === 2 ? (
-                  <>
-                    <Button
-                      type="button"
-                      onClick={() => { setShareShortcutStep(1); setSelectedMeetingForShare(null); }}
-                      disabled={sharingInProgress}
-                      className="flex-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
-                    >
-                      Retour
-                    </Button>
-                    <Button
-                      onClick={submitShareShortcut}
-                      disabled={sharingInProgress || !selectedMeetingForShare}
-                      className="flex-1 rounded-xl bg-blue-500 hover:bg-blue-600 text-white"
-                    >
-                      {sharingInProgress ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Partager'}
-                    </Button>
-                  </>
-                ) : (
-                  <Button
-                    onClick={() => { setShareShortcutOpen(false); setShareShortcutStep(1); setSelectedMeetingForShare(null); }}
-                    className="w-full rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
-                  >
-                    Fermer
-                  </Button>
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="step2"
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -12 }}
+                  transition={{ duration: 0.22, ease: [0.25, 0.1, 0.25, 1] }}
+                  className="flex flex-col h-full items-center justify-center"
+                >
+                  <div className="w-full max-w-sm flex flex-col gap-6 items-center">
+                    {selectedMeetingForShare && (
+                      <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-slate-50 border border-slate-100 w-full justify-center">
+                        <FileText className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                        <p className="font-medium text-slate-800 truncate text-sm">
+                          {selectedMeetingForShare.title || selectedMeetingForShare.name || 'Sans titre'}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col items-center gap-2 w-full">
+                      <p className="text-sm font-medium text-slate-700">Type d'accès</p>
+                      <div className="inline-flex p-1 bg-slate-100 rounded-md">
+                        <button
+                          type="button"
+                          onClick={() => setShareShortcutRole('reader')}
+                          className={cn(
+                            'px-5 py-2.5 text-sm font-medium rounded transition-all duration-200',
+                            shareShortcutRole === 'reader'
+                              ? 'bg-white text-blue-600 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-700'
+                          )}
+                        >
+                          Lecteur
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShareShortcutRole('editor')}
+                          className={cn(
+                            'px-5 py-2.5 text-sm font-medium rounded transition-all duration-200',
+                            shareShortcutRole === 'editor'
+                              ? 'bg-white text-blue-600 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-700'
+                          )}
+                        >
+                          Éditeur
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-4 w-full max-w-[280px]">
+                      <span className="text-sm text-slate-700">Inclure la transcription</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={shareShortcutIncludeTranscript}
+                        onClick={() => setShareShortcutIncludeTranscript((v) => !v)}
+                        className={cn(
+                          'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2',
+                          shareShortcutIncludeTranscript ? 'bg-blue-500' : 'bg-slate-200'
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition duration-200 translate-y-0',
+                            shareShortcutIncludeTranscript ? 'translate-x-5' : 'translate-x-0.5'
+                          )}
+                        />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+          <DialogFooter className="px-4 sm:px-6 py-4 border-t border-slate-100 flex-row gap-2 sm:gap-2 flex-shrink-0">
+            {shareShortcutStep === 2 ? (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => { setShareShortcutStep(1); setSelectedMeetingForShare(null); }}
+                  disabled={sharingInProgress}
+                  className="flex-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700"
+                >
+                  Retour
+                </Button>
+                <Button
+                  onClick={submitShareShortcut}
+                  disabled={sharingInProgress || !selectedMeetingForShare}
+                  className="flex-1 rounded-md bg-blue-500 hover:bg-blue-600 text-white"
+                >
+                  {sharingInProgress ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Partager'}
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="secondary"
+                onClick={() => { setShareShortcutOpen(false); setShareShortcutStep(1); setSelectedMeetingForShare(null); }}
+                className="w-full rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700"
+              >
+                Fermer
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Animation de succès après partage (comme enregistrement ou suppression) */}
+      <ShareValidation
+        show={showShareSuccess}
+        onComplete={() => setShowShareSuccess(false)}
+      />
 
       {/* Meeting Detail Overlay */}
       {selectedMeeting && (
@@ -2074,7 +2082,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
           onSummaryTextChange={setEditedSummaryText}
           onDelete={handleDelete}
           onShare={handleShare}
-          onPlayAudio={handlePlayAudio}
+          onPlayAudio={() => {}}
           onSaveTitle={async (meetingId, newTitle) => {
             try {
               await updateMeetingTitle(meetingId, newTitle);
@@ -2089,7 +2097,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
               ));
             } catch (error) {
               logger.error('Error saving title:', error);
-              showErrorPopup('Erreur', 'Impossible de modifier le titre');
+              showErrorPopup('Erreur', 'Impossible de modifier le titre. Vérifiez votre connexion.');
             }
           }}
           resolveTemplateForMeeting={resolveTemplateForMeeting}
@@ -2104,7 +2112,7 @@ const SharesView: React.FC<SharesViewProps> = (props) => {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/30 backdrop-blur-sm"
+            className="fixed inset-0 z-[1400] flex items-end sm:items-center justify-center sm:p-4 bg-slate-900/30 backdrop-blur-sm"
             onClick={() => !isUpdatingPermissions && setEditPermissionsOpen(false)}
           >
             <motion.div
