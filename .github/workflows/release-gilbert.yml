@@ -285,8 +285,9 @@ jobs:
           MACOS_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
           echo "Création du PKG signé avec $INSTALLER_IDENTITY (install → /Applications)..."
           # components.plist : BundleIsRelocatable=false force l'installation dans /Applications
+          # productbuild : le chemin de sortie doit être le DERNIER argument
           if pkgbuild --root "$MACOS_DIR" --component-plist desktop/components.plist --install-location /Applications --identifier com.gilbert.desktop.pkg /tmp/gilbert-component.pkg 2>/tmp/pkgbuild_err.txt && \
-             productbuild --package /tmp/gilbert-component.pkg "$PKG" --sign "$INSTALLER_IDENTITY" 2>/tmp/productbuild_err.txt; then
+             productbuild --package /tmp/gilbert-component.pkg --sign "$INSTALLER_IDENTITY" --keychain "$RUNNER_TEMP/build.keychain" "$PKG" 2>/tmp/productbuild_err.txt; then
             xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID" --wait 2>&1 | tee /tmp/notary_pkg_result.txt
             if grep -q "status: Accepted" /tmp/notary_pkg_result.txt; then
               xcrun stapler staple "$PKG"
