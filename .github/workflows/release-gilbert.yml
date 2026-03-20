@@ -276,14 +276,17 @@ jobs:
           echo "✅ Pipeline terminé"
 
           # ÉTAPE 10 : Créer un installateur .pkg signé (évite souvent le warning Gatekeeper)
-          # productbuild --sign (pas codesign) : outil Apple pour signer les .pkg
+          # pkgbuild + productbuild avec BundleIsRelocatable=false pour forcer /Applications
           echo "::group::Identités disponibles pour PKG"
           security find-identity -v -p codesigning "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
           echo "::endgroup::"
           PKG="${DMG%.dmg}.pkg"
           INSTALLER_IDENTITY="${APPLE_INSTALLER_IDENTITY:-Developer ID Installer: Mathis Escriva (2U6L38DLSW)}"
-          echo "Création du PKG signé avec $INSTALLER_IDENTITY..."
-          if productbuild --component "$APP" /Applications "$PKG" --sign "$INSTALLER_IDENTITY" 2>/tmp/productbuild_err.txt; then
+          MACOS_DIR="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos"
+          echo "Création du PKG signé avec $INSTALLER_IDENTITY (install → /Applications)..."
+          # components.plist : BundleIsRelocatable=false force l'installation dans /Applications
+          if pkgbuild --root "$MACOS_DIR" --component-plist desktop/components.plist --install-location /Applications --identifier com.gilbert.desktop.pkg /tmp/gilbert-component.pkg 2>/tmp/pkgbuild_err.txt && \
+             productbuild --package /tmp/gilbert-component.pkg "$PKG" --sign "$INSTALLER_IDENTITY" 2>/tmp/productbuild_err.txt; then
             xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID" --wait 2>&1 | tee /tmp/notary_pkg_result.txt
             if grep -q "status: Accepted" /tmp/notary_pkg_result.txt; then
               xcrun stapler staple "$PKG"
@@ -293,10 +296,10 @@ jobs:
               rm -f "$PKG"
             fi
           else
-            rm -f "$PKG"
-            echo "⚠️ Certificat Developer ID Installer non trouvé — PKG non créé (DMG uniquement)"
-            echo "Erreur productbuild:"
-            cat /tmp/productbuild_err.txt
+            rm -f "$PKG" /tmp/gilbert-component.pkg
+            echo "⚠️ Échec création PKG (certificat Installer ou pkgbuild)"
+            echo "Erreur pkgbuild:" && cat /tmp/pkgbuild_err.txt 2>/dev/null || true
+            echo "Erreur productbuild:" && cat /tmp/productbuild_err.txt 2>/dev/null || true
             echo ""
             echo "→ Vérifie APPLE_INSTALLER_CERTIFICATE (export séparé du cert Installer). Voir SECRETS-RELEASE.md"
           fi
