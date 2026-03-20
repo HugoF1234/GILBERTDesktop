@@ -31,11 +31,12 @@ Pour que le workflow `release-gilbert.yml` fonctionne et produise un DMG **sign�
 | `APPLE_TEAM_ID` | `2U6L38DLSW` | Team ID Apple (visible dans le certificat) |
 | `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Mathis Escriva (2U6L38DLSW)` | Nom exact de l'identité codesign (app) |
 | `APPLE_INSTALLER_IDENTITY` | `Developer ID Installer: Mathis Escriva (2U6L38DLSW)` | Nom exact pour signer le `.pkg` (certificat différent) |
-| `APPLE_INSTALLER_CERTIFICATE` | *(optionnel)* | Si un seul .p12 avec Application+Installer ne donne qu'une identité en CI, exporte **uniquement** le certificat Developer ID Installer (avec sa clé) dans un second .p12, encode en base64, et ajoute ce secret. Réutilise `APPLE_CERTIFICATE_PASSWORD` pour l'import. |
+| `APPLE_INSTALLER_CERTIFICATE` | *(optionnel)* | Exporte **uniquement** le certificat Developer ID Installer (avec sa clé) dans un second .p12. Encode : `base64 -i installer.p12 | tr -d '\n' | pbcopy` (sans retours à la ligne). |
+| `APPLE_INSTALLER_CERTIFICATE_PASSWORD` | *(optionnel)* | Mot de passe du .p12 Installer si différent de `APPLE_CERTIFICATE_PASSWORD`. Sinon, ce dernier est réutilisé. |
 
 **Certificat Installer :** Le `.pkg` nécessite un certificat **Developer ID Installer** (distinct de Developer ID Application). Créez-le dans Apple Developer → Certificates, IDs & Profiles.
 
-**Si « 1 valid identities found » malgré un .p12 avec les 2 certs :** L'export Keychain peut ne pas associer correctement les deux clés. Solution : exporter **séparément** le certificat Developer ID Installer (clic droit → Exporter) dans un fichier `installer.p12`, puis créer le secret `APPLE_INSTALLER_CERTIFICATE` avec `base64 -i installer.p12 | pbcopy`.
+**Si « 1 valid identities found » malgré un .p12 avec les 2 certs :** Exporter **séparément** le certificat Developer ID Installer (clic droit → Exporter) dans `installer.p12`, puis : `base64 -i installer.p12 | tr -d '\n' | pbcopy` pour le secret `APPLE_INSTALLER_CERTIFICATE`.
 
 **Si vous utilisez un autre certificat**, récupérez l'identité exacte après import :
 
