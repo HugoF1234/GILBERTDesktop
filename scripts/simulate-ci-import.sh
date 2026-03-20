@@ -10,8 +10,10 @@
 set -e
 KEYCHAIN_PATH=$(mktemp -u).keychain
 KEYCHAIN_PASSWORD=$(openssl rand -base64 16)
-trap "security delete-keychain $KEYCHAIN_PATH 2>/dev/null || true" EXIT
+trap "security delete-keychain $KEYCHAIN_PATH 2>/dev/null; security list-keychain -d user -s $ORIGINAL_KEYCHAINS 2>/dev/null || true" EXIT
 
+# Sauvegarder la liste des keychains (pour les certificats intermédiaires Apple)
+ORIGINAL_KEYCHAINS=$(security list-keychain -d user 2>/dev/null | tr '\n' ' ')
 decode_base64() { echo "$1" | tr -d '\n\r' | base64 --decode; }
 
 echo "Création trousseau..."
@@ -37,11 +39,29 @@ if [ -n "$APPLE_INSTALLER_CERTIFICATE_B64" ]; then
   rm /tmp/installer.p12
 fi
 
-security list-keychain -d user -a "$KEYCHAIN_PATH"
-security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+# Notre keychain en premier + keychains système (WWDR, etc.) pour valider la chaîne
+security list-keychain -d user -s "$KEYCHAIN_PATH" $ORIGINAL_KEYCHAINS
+security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" 2>/dev/null
 
 echo ""
-echo "Identités trouvées:"
-security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+echo "Identités (toutes, y compris non valides):"
+security find-identity -p codesigning 2>/dev/null || true
 echo ""
-echo "Si tu vois 2 identités, le PKG devrait fonctionner en CI."
+echo "Identités valides (policy codesigning):"
+security find-identity -v -p codesigning 2>/dev/null || true
+echo ""
+echo "Test productbuild (si 2 identités ci-dessus, le PKG devrait fonctionner en CI):"
+if [ -d "desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos" ]; then
+  APP="desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Gilbert.app"
+  if [ -d "$APP" ]; then
+    INSTALLER_IDENTITY="Developer ID Installer: Mathis Escriva (2U6L38DLSW)"
+    if productbuild --component "$APP" /Applications /tmp/test-gilbert.pkg --sign "$INSTALLER_IDENTITY" 2>/dev/null; then
+      echo "✅ productbuild OK — le PKG fonctionnera en CI"
+      rm -f /tmp/test-gilbert.pkg
+    else
+      echo "⚠️ productbuild a échoué (certificat Installer non trouvé)"
+    fi
+  fi
+else
+  echo "(Pas d'app buildée — lance le build Tauri puis relance ce script)"
+fi

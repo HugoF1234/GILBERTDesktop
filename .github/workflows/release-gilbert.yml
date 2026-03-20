@@ -55,6 +55,7 @@ jobs:
           # Créer un trousseau temporaire pour CI
           KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
           KEYCHAIN_PASSWORD=$(openssl rand -base64 16)
+          ORIGINAL_KEYCHAINS=$(security list-keychain -d user 2>/dev/null | tr '\n' ' ')
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
@@ -85,9 +86,9 @@ jobs:
           else
             echo "APPLE_INSTALLER_CERTIFICATE non défini — PKG non disponible"
           fi
-          # Ajouter notre trousseau en tête de liste (garder les keychains système pour les certificats intermédiaires)
-          security list-keychain -d user -a "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Notre keychain + keychains système (WWDR) pour valider la chaîne des certificats
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $ORIGINAL_KEYCHAINS
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" 2>/dev/null
           echo "Identités disponibles (codesigning) :"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -10
           echo "(Attendu: 2 identités pour DMG + PKG)"
