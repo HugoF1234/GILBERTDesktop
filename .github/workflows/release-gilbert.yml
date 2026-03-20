@@ -66,7 +66,7 @@ jobs:
             echo "::error::APPLE_CERTIFICATE : décodage base64 invalide (fichier vide). Utilisez: base64 -i cert.p12 | tr -d '\n' | pbcopy"
             exit 1
           fi
-          security import /tmp/certificate.p12 -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          security import /tmp/certificate.p12 -k "$KEYCHAIN_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/productbuild
           rm /tmp/certificate.p12
           # Importer le certificat Installer séparément
           INSTALLER_PWD="${APPLE_INSTALLER_CERTIFICATE_PASSWORD:-$APPLE_CERTIFICATE_PASSWORD}"
@@ -75,7 +75,7 @@ jobs:
             decode_base64 "$APPLE_INSTALLER_CERTIFICATE" > /tmp/installer.p12
             if [ ! -s /tmp/installer.p12 ]; then
               echo "⚠️ APPLE_INSTALLER_CERTIFICATE : décodage base64 invalide (fichier vide). Utilisez: base64 -i installer.p12 | tr -d '\n' | pbcopy"
-            elif security import /tmp/installer.p12 -k "$KEYCHAIN_PATH" -P "$INSTALLER_PWD" -T /usr/bin/codesign -T /usr/bin/productsign 2>/tmp/installer_import_err.txt; then
+            elif security import /tmp/installer.p12 -k "$KEYCHAIN_PATH" -P "$INSTALLER_PWD" -T /usr/bin/codesign -T /usr/bin/productsign -T /usr/bin/productbuild 2>/tmp/installer_import_err.txt; then
               echo "✅ Certificat Installer importé"
             else
               echo "⚠️ Échec import certificat Installer (mot de passe différent ?) :"
@@ -85,7 +85,8 @@ jobs:
           else
             echo "APPLE_INSTALLER_CERTIFICATE non défini — PKG non disponible"
           fi
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          # Ajouter notre trousseau en tête de liste (garder les keychains système pour les certificats intermédiaires)
+          security list-keychain -d user -a "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           echo "Identités disponibles (codesigning) :"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH" | head -10
@@ -273,15 +274,15 @@ jobs:
           fi
           echo "✅ Pipeline terminé"
 
-          # ÉTAPE 10 : Créer un installateur .pkg (évite souvent le warning Gatekeeper)
-          # L'app installée via .pkg n'hérite généralement pas de la quarantaine
-          # Nécessite le certificat "Developer ID Installer" (voir SECRETS-RELEASE.md)
-          # On tente toujours : le grep échoue si GitHub masque les noms d'identité (***)
+          # ÉTAPE 10 : Créer un installateur .pkg signé (évite souvent le warning Gatekeeper)
+          # productbuild --sign (pas codesign) : outil Apple pour signer les .pkg
+          echo "::group::Identités disponibles pour PKG"
+          security find-identity -v -p codesigning "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
+          echo "::endgroup::"
           PKG="${DMG%.dmg}.pkg"
           INSTALLER_IDENTITY="${APPLE_INSTALLER_IDENTITY:-Developer ID Installer: Mathis Escriva (2U6L38DLSW)}"
-          echo "Tentative de création du PKG avec $INSTALLER_IDENTITY..."
-          productbuild --component "$APP" /Applications "$PKG"
-          if codesign --force --timestamp --sign "$INSTALLER_IDENTITY" "$PKG" 2>/dev/null; then
+          echo "Création du PKG signé avec $INSTALLER_IDENTITY..."
+          if productbuild --component "$APP" /Applications "$PKG" --sign "$INSTALLER_IDENTITY" 2>/tmp/productbuild_err.txt; then
             xcrun notarytool submit "$PKG" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$TEAM_ID" --wait 2>&1 | tee /tmp/notary_pkg_result.txt
             if grep -q "status: Accepted" /tmp/notary_pkg_result.txt; then
               xcrun stapler staple "$PKG"
@@ -292,7 +293,11 @@ jobs:
             fi
           else
             rm -f "$PKG"
-            echo "⚠️ Certificat Developer ID Installer non trouvé — PKG non créé (DMG uniquement). Ajoute le secret APPLE_INSTALLER_CERTIFICATE (voir SECRETS-RELEASE.md)"
+            echo "⚠️ Certificat Developer ID Installer non trouvé — PKG non créé (DMG uniquement)"
+            echo "Erreur productbuild:"
+            cat /tmp/productbuild_err.txt
+            echo ""
+            echo "→ Vérifie APPLE_INSTALLER_CERTIFICATE (export séparé du cert Installer). Voir SECRETS-RELEASE.md"
           fi
 
       - name: Diagnostic DMG (vérification notarisation)

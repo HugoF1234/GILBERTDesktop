@@ -36,7 +36,14 @@ Pour que le workflow `release-gilbert.yml` fonctionne et produise un DMG **sign�
 
 **Certificat Installer :** Le `.pkg` nécessite un certificat **Developer ID Installer** (distinct de Developer ID Application). Créez-le dans Apple Developer → Certificates, IDs & Profiles.
 
-**Si « 1 valid identities found » malgré un .p12 avec les 2 certs :** Exporter **séparément** le certificat Developer ID Installer (clic droit → Exporter) dans `installer.p12`, puis : `base64 -i installer.p12 | tr -d '\n' | pbcopy` pour le secret `APPLE_INSTALLER_CERTIFICATE`.
+**Si « 1 valid identities found » ou « PKG non créé » :** Le workflow utilise `productbuild --sign` (pas codesign) pour les .pkg. Il faut exporter **séparément** le certificat Developer ID Installer dans `installer.p12`, puis :
+```bash
+base64 -i installer.p12 | tr -d '\n' | pbcopy
+```
+Mettre à jour le secret `APPLE_INSTALLER_CERTIFICATE`. Tester localement :
+```bash
+./scripts/simulate-ci-import.sh  # avec les variables d'env (voir le script)
+```
 
 **Si vous utilisez un autre certificat**, récupérez l'identité exacte après import :
 
