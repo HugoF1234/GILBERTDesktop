@@ -16,7 +16,6 @@ use hound::{SampleFormat as WavSampleFormat, WavReader, WavWriter};
 use thiserror::Error;
 use uuid::Uuid;
 
-// Windows system audio capture via WASAPI Loopback
 #[cfg(target_os = "windows")]
 use crate::system_audio::windows::WindowsSystemAudio;
 #[cfg(target_os = "windows")]
@@ -89,9 +88,7 @@ pub struct Recorder {
     // Microphone stream (cpal)
     mic_stream: Option<Stream>,
     mic_output_path: Option<PathBuf>,
-    // System audio path (ScreenCaptureKit on macOS / WASAPI Loopback on Windows)
     system_audio_path: Option<PathBuf>,
-    // Windows WASAPI Loopback capturer
     #[cfg(target_os = "windows")]
     windows_system_audio: Option<WindowsSystemAudio>,
     // Combined output path
@@ -267,17 +264,14 @@ impl Recorder {
             }
         }
 
-        // Start Windows system audio capture (WASAPI Loopback)
         #[cfg(target_os = "windows")]
         if mode == RecordingMode::SystemOnly || mode == RecordingMode::Both {
             let system_path = audio_dir.join(format!("system-{}.wav", recording_name));
-            Self::log(&format!("[RECORDER] Starting Windows WASAPI Loopback system audio: {:?}", system_path));
-
             match WindowsSystemAudio::new() {
                 Ok(mut capturer) => {
                     match capturer.start_recording(system_path.clone()) {
                         Ok(_) => {
-                            Self::log("[RECORDER] ✅ Windows WASAPI Loopback started");
+                            Self::log(&format!("[RECORDER] wasapi loopback started: {:?}", system_path));
                             self.system_audio_path = Some(system_path.clone());
                             self.windows_system_audio = Some(capturer);
                             if primary_path.is_none() {
@@ -285,17 +279,16 @@ impl Recorder {
                             }
                         }
                         Err(e) => {
-                            Self::log(&format!("[RECORDER] ⚠️ WASAPI Loopback start failed: {:?}", e));
+                            Self::log(&format!("[RECORDER] wasapi start failed: {:?}", e));
                             if mode == RecordingMode::SystemOnly {
                                 self.recording.store(false, Ordering::SeqCst);
                                 return Err(RecorderError::SystemAudioNotAvailable(format!("{:?}", e)));
                             }
-                            Self::log("[RECORDER] Continuing with microphone only.");
                         }
                     }
                 }
                 Err(e) => {
-                    Self::log(&format!("[RECORDER] ⚠️ Failed to initialize WASAPI: {:?}", e));
+                    Self::log(&format!("[RECORDER] wasapi init failed: {:?}", e));
                     if mode == RecordingMode::SystemOnly {
                         self.recording.store(false, Ordering::SeqCst);
                         return Err(RecorderError::SystemAudioNotAvailable(format!("{:?}", e)));
@@ -319,11 +312,14 @@ impl Recorder {
                 }
                 Err(e) => {
                     Self::log(&format!("[RECORDER] ERROR starting microphone: {:?}", e));
-                    self.recording.store(false, Ordering::SeqCst); // Reset on error
-                    // Stop system audio if it was started
+                    self.recording.store(false, Ordering::SeqCst);
                     #[cfg(target_os = "macos")]
                     {
                         let _ = unsafe { sck_stop_capture() };
+                    }
+                    #[cfg(target_os = "windows")]
+                    if let Some(mut capturer) = self.windows_system_audio.take() {
+                        let _ = capturer.stop_recording();
                     }
                     return Err(e);
                 }
@@ -672,18 +668,15 @@ impl Recorder {
             Self::log("[RECORDER] ✅ System audio capture stopped");
         }
 
-        // Stop Windows WASAPI Loopback system audio
         #[cfg(target_os = "windows")]
         if let Some(mut capturer) = self.windows_system_audio.take() {
-            Self::log("[RECORDER] Stopping Windows WASAPI Loopback...");
             match capturer.stop_recording() {
                 Ok(_) => {
-                    // Give a short delay for the WAV writer to finalize
                     thread::sleep(Duration::from_millis(200));
-                    Self::log("[RECORDER] ✅ Windows WASAPI Loopback stopped");
+                    Self::log("[RECORDER] wasapi loopback stopped");
                 }
                 Err(e) => {
-                    Self::log(&format!("[RECORDER] ⚠️ Error stopping WASAPI Loopback: {:?}", e));
+                    Self::log(&format!("[RECORDER] wasapi stop error: {:?}", e));
                 }
             }
         }
